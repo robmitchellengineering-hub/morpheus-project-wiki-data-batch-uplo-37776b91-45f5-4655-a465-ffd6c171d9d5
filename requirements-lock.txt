@@ -16,4 +16,4 @@ charset-normalizer==3.3.2
 chardet==4.0.0
 lxml==5.2.1
 pyinstaller==6.6.0
-setuptools==68.0.0
+setuptools==69.5.1
