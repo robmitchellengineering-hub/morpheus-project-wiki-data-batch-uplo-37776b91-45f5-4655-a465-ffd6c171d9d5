@@ -7,7 +7,6 @@ A Windows desktop client for bulk-uploading datasets to Wikidata, with an interf
 - Scan local folders for data sheets (`.xlsx`, `.csv`) and images (`.jpg`, `.jpeg`, `.png`, `.tif`, `.tiff`).
 - Load tabular data into a preview grid for review.
 - Extract image metadata locally: EXIF, GPS, camera make/model, IPTC, XMP, PNG text chunks.
-- **Fill fields from photo metadata**: match spreadsheet rows to photos by filename and pull GPS coordinates, date taken, and camera model straight into new columns — ready to map to a property like P625 (coordinate location).
 - Schema mapping: match spreadsheet columns to Wikidata properties using local reference tables, with fuzzy suggestions.
 - Project constants: apply fixed statements (e.g., instance of (P31) = village (Q532)) to every uploaded item.
 - Secure bot-password and OAuth authentication (credentials encrypted via Windows DPAPI).
@@ -126,16 +125,6 @@ You can use the **Check Existing Items** button to query Wikidata for items that
 
 **Important:** The duplicate key columns should contain values that are both distinctive and stable for a given entity (e.g., a unique identifier, a combination of name and location). Using poorly chosen keys may result in false positives.
 
-## Filling Fields from Photo Metadata
-
-If your spreadsheet has a column naming each row's photo file, and those photos are in the same folder as the spreadsheet, click **Fill from Photos...** to pull data straight from each photo's EXIF/IPTC metadata into new columns:
-
-- **GPS coordinates** → a `GPS Coordinates` column, formatted as `latitude,longitude`. Map this column to **P625 (coordinate location)** and it uploads as a real Wikidata globe-coordinate claim (not just text).
-- **Date taken** → a `Date Taken` column (`YYYY-MM-DD`), from the photo's EXIF `DateTimeOriginal`.
-- **Camera model** → a `Camera Model` column, from the photo's EXIF `Model` tag.
-
-Rows are matched to photos by filename (with or without the extension, case-insensitive). Only empty cells are filled unless you check **Overwrite existing values**. Any row without a matching photo, or a matching photo with no GPS/date/camera data, is left untouched and counted in the summary shown after the fill runs.
-
 ## AI-Powered Schema Mapping
 
 The application can optionally use a remote AI endpoint to suggest column-to-property mappings based on a sample of your data. This is useful when local fuzzy matching is insufficient or the schema is ambiguous.
@@ -155,35 +144,39 @@ The application can optionally use a remote AI endpoint to suggest column-to-pro
 3. The app then matches each returned label against the local `wikidata_properties.xlsx` to obtain the property ID, and updates the mapping dropdowns accordingly.
 4. If the endpoint is not configured or the request fails, the app automatically falls back to local fuzzy mapping.
 
-### Configuration — Connect to Morpheus
+### Configuration
 
-AI mapping runs on your own Morpheus account and credits — no shared key, no
-environment variables to set:
+The endpoint URL and optional API key are read from environment variables:
 
-1. Open **Settings** in the app.
-2. Under **AI Mapping — Morpheus Connect**, click **Connect...**.
-3. A short code appears. Either enter it at [morpheus.nz/connect](https://morpheus.nz/connect),
-   or click the button in the dialog to open it directly (on your phone or another
-   device is fine — approval happens in a browser, not necessarily on this machine).
-4. Once approved, the dialog closes automatically and Settings shows **Connected**.
+- `MORPHEUS_AI_ENDPOINT` — full URL of the AI mapping endpoint (e.g., `https://morpheus.nz/api/schema`)
+- `MORPHEUS_AI_API_KEY` — (optional) bearer token for authentication
 
-That's it — the **AI Suggest** button now sends column headers and up to 5 sample rows
-to Morpheus, billed against your own account. Nothing is shared with other operators
-running this same build.
+Set these variables before launching the application. On Windows, you can set them in the command prompt:
 
-To disconnect, open Settings and click **Disconnect** — this only removes the saved
-connection on this machine; it doesn't affect your Morpheus account.
+```
+set MORPHEUS_AI_ENDPOINT=https://morpheus.nz/api/schema
+set MORPHEUS_AI_API_KEY=your_api_key_here
+```
 
-### Advanced: Custom AI Endpoint
+If the endpoint is not set, the **AI Suggest** button will show a warning and use the local mapping instead.
 
-If you'd rather bring your own AI mapping endpoint instead of using Morpheus Connect,
-Settings has an **Advanced: Custom AI Endpoint** section (endpoint URL + optional API
-key). This is only used when Morpheus Connect isn't set up — if you're connected to
-Morpheus, that always takes priority. The endpoint is expected to return
-`{"mappings": [{"column": "...", "label": "..."}]}` for a POST of
-`{"columns": [...], "samples": [[...], ...]}`.
+**Note:** These variables are read only at the time you click the button. To change them, restart the application with the new environment.
 
-If neither is configured, the **AI Suggest** button falls back to local fuzzy matching.
+### Using Google Gemini (Free)
+
+You can use Google Gemini instead of the Morpheus endpoint for AI schema mapping. This is useful while the Morpheus endpoint is not yet available, and Gemini offers a free tier.
+
+To enable Gemini:
+
+1. Obtain a Gemini API key from [Google AI Studio](https://aistudio.google.com/).
+2. Set the environment variable `GEMINI_API_KEY` to your key.
+   - If you also set `GEMINI_MODEL`, you can override the default model. The default is `gemini-3.5-flash`.
+3. Optionally, if you have no `GEMINI_API_KEY` but have set `GEMINI_MODEL`, the app will fall back to `MORPHEUS_AI_API_KEY` (if set).
+4. When `GEMINI_API_KEY` is present, the Morpheus endpoint (`MORPHEUS_AI_ENDPOINT`) is ignored.
+
+Gemini responses are converted into the same column-to-property mapping format. If the request fails or returns no usable mappings, the app falls back to local fuzzy suggestion.
+
+**Warning:** Keep your API key secret. Do not commit it to version control.
 
 ## Reference Tables
 

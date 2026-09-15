@@ -40,30 +40,7 @@ def validate_oauth_login(consumer_key: str, consumer_secret: str, access_token: 
         return None
 
 
-# Precision reported for globe-coordinate claims built from row data (e.g.
-# EXIF GPS via core/photo_metadata_merge.py). Typical phone/camera GPS
-# accuracy is a few to ~15m; 0.0001 degrees (~11m at the equator) is a
-# reasonable match rather than overclaiming survey-grade precision.
-COORDINATE_PRECISION_DEGREES = 0.0001
-
-
-def _parse_coordinate(value_str: str) -> Optional[tuple]:
-    """Parse a 'lat,lon' string into (latitude, longitude) floats, or None
-    if it isn't coordinate-shaped or the values are out of range."""
-    parts = value_str.split(',')
-    if len(parts) != 2:
-        return None
-    try:
-        lat = float(parts[0].strip())
-        lon = float(parts[1].strip())
-    except ValueError:
-        return None
-    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
-        return None
-    return lat, lon
-
-
-def _value_to_statement(property_id: str, value: Any) -> Union[wdi_core.WDItemID, wdi_core.WDUrl, wdi_core.WDString, wdi_core.WDGlobeCoordinate, None]:
+def _value_to_statement(property_id: str, value: Any) -> Union[wdi_core.WDItemID, wdi_core.WDUrl, wdi_core.WDString, None]:
     """Convert a single value into a Wikidata statement object."""
     if pd.isna(value) or value == '':
         return None
@@ -71,16 +48,6 @@ def _value_to_statement(property_id: str, value: Any) -> Union[wdi_core.WDItemID
     value_str = str(value).strip()
     if not value_str:
         return None
-
-    # Globe coordinate ("coordinate location") -- must be built as
-    # WDGlobeCoordinate, not a plain string, or Wikidata rejects/mishandles
-    # the claim. A value that doesn't parse as 'lat,lon' falls through to
-    # the string fallback below rather than being dropped.
-    if property_id == 'P625':
-        coord = _parse_coordinate(value_str)
-        if coord is not None:
-            lat, lon = coord
-            return wdi_core.WDGlobeCoordinate(lat, lon, COORDINATE_PRECISION_DEGREES, prop_nr=property_id)
 
     # Item ID
     if value_str.startswith('Q') and value_str[1:].isdigit():

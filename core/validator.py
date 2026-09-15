@@ -2,21 +2,6 @@ import pandas as pd
 from typing import Dict, List, Optional, Any
 
 
-def _is_valid_coordinate_string(value_str: str) -> bool:
-    """Same shape core.uploader._value_to_statement expects for P625:
-    'lat,lon' with both values in range. Duplicated here (not imported)
-    to avoid a validator<->uploader circular import."""
-    parts = value_str.split(',')
-    if len(parts) != 2:
-        return False
-    try:
-        lat = float(parts[0].strip())
-        lon = float(parts[1].strip())
-    except ValueError:
-        return False
-    return -90 <= lat <= 90 and -180 <= lon <= 180
-
-
 def validate_dataset(
     df: pd.DataFrame,
     mapping: Dict[str, Optional[str]],
@@ -114,20 +99,5 @@ def validate_dataset(
                 warnings.append(
                     f"Row {r['row']}: missing value for column '{r['col']}'"
                 )
-
-    # 4. Coordinate format (P625 "coordinate location" must be 'lat,lon')
-    coordinate_cols = [col for col, pid in mapping.items() if pid == 'P625' and col in df.columns]
-    for col in coordinate_cols:
-        bad_count = 0
-        for value in df[col]:
-            if pd.isna(value) or str(value).strip() == '':
-                continue
-            if not _is_valid_coordinate_string(str(value)):
-                bad_count += 1
-        if bad_count > 0:
-            warnings.append(
-                f"Column '{col}' is mapped to P625 (coordinate location) but {bad_count} value(s) "
-                "aren't in 'latitude,longitude' format and will upload as a plain string instead of a coordinate."
-            )
 
     return {"errors": errors, "warnings": warnings}

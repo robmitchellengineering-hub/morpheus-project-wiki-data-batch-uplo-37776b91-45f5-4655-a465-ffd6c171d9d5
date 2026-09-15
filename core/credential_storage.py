@@ -9,10 +9,6 @@ from typing import Optional, Dict
 from config import BASE_DIR
 
 CREDENTIAL_FILE = BASE_DIR / 'credentials.dat'
-# Separate file from CREDENTIAL_FILE (Wikidata bot login) — a shared blob
-# would mean any change here risks corrupting or overwriting the operator's
-# already-working Wikidata credentials, for no benefit.
-MORPHEUS_TOKEN_FILE = BASE_DIR / 'morpheus_token.dat'
 
 # Constants for CryptProtectData/CryptUnprotectData
 CRYPTPROTECT_UI_FORBIDDEN = 0x01
@@ -133,51 +129,3 @@ def load_credentials() -> Optional[Dict[str, str]]:
         return json.loads(decrypted.decode('utf-8'))
     except Exception:
         return None
-
-
-def save_morpheus_token(token: str) -> bool:
-    """Encrypt and save a Morpheus Connect device token (dvc_...) to disk
-    using DPAPI, same as the Wikidata credentials but in a separate file."""
-    if sys.platform != 'win32':
-        return False
-    try:
-        encrypted = _encrypt_bytes(token.encode('utf-8'))
-        if encrypted is None:
-            return False
-        encoded = base64.b64encode(encrypted).decode('ascii')
-        with open(MORPHEUS_TOKEN_FILE, 'w') as f:
-            f.write(encoded)
-        return True
-    except Exception:
-        return False
-
-
-def load_morpheus_token() -> Optional[str]:
-    """Load and decrypt the saved Morpheus Connect device token.
-
-    Returns the token string if available and decryption succeeds,
-    otherwise None (not connected yet, or running off-Windows).
-    """
-    if sys.platform != 'win32':
-        return None
-    if not MORPHEUS_TOKEN_FILE.exists():
-        return None
-    try:
-        encoded = MORPHEUS_TOKEN_FILE.read_text()
-        encrypted = base64.b64decode(encoded)
-        decrypted = _decrypt_bytes(encrypted)
-        if decrypted is None:
-            return None
-        return decrypted.decode('utf-8')
-    except Exception:
-        return None
-
-
-def clear_morpheus_token() -> None:
-    """Remove the saved Morpheus Connect device token (Settings ->
-    Disconnect). Best-effort; never raises."""
-    try:
-        if MORPHEUS_TOKEN_FILE.exists():
-            MORPHEUS_TOKEN_FILE.unlink()
-    except Exception:
-        pass
