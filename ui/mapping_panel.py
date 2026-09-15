@@ -1,0 +1,334 @@
+import os
+import json
+import pandas as pd
+import requests
+from PyQt6 import QtCore, QtWidgets
+from core.schema_mapper import suggest_mappings
+from core.gemini_adapter import suggest_mappings_with_gemini
+
+
+class MappingPanel(QtWidgets.QWidget):
+    """Widget for mapping dataframe columns to Wikidata properties and showing project constants."""
+
+    def __init__(self, properties_df, constants_df, parent=None):
+        super().__init__(parent)
+        self.properties_df = properties_df
+        self.constants_df = constants_df
+        self.column_mapping = {}  # column name (string) -> property_id or None
+        self.duplicate_key_columns = set()
+        self.preview_df = None  # dataframe sample for AI mapping
+        self._create_ui()
+        self._populate_constants_table()
+
+    def _create_ui(self):
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(5)
+
+        # Column mapping section
+        self.mapping_label = QtWidgets.QLabel("Column Mapping")
+        font = self.mapping_label.font()
+        font.setBold(True)
+        self.mapping_label.setFont(font)
+        layout.addWidget(self.mapping_label)
+
+        self.mapping_table = QtWidgets.QTableWidget(0, 3)
+        self.mapping_table.setHorizontalHeaderLabels(["Column Name", "Mapped Property", "Duplicate Key?"])
+        self.mapping_table.verticalHeader().setVisible(False)
+        self.mapping_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.mapping_table.horizontalHeader().setStretchLastSection(True)
+        layout.addWidget(self.mapping_table)
+
+        self.suggest_button = QtWidgets.QPushButton("Suggest Mappings")
+        self.suggest_button.clicked.connect(self._suggest_mappings)
+        layout.addWidget(self.suggest_button)
+
+        self.ai_suggest_button = QtWidgets.QPushButton("AI Suggest")
+        self.ai_suggest_button.clicked.connect(self._ai_suggest_mappings)
+        layout.addWidget(self.ai_suggest_button)
+
+        # Project constants section
+        self.constants_label = QtWidgets.QLabel("Project Constants")
+        font = self.constants_label.font()
+        font.setBold(True)
+        self.constants_label.setFont(font)
+        layout.addWidget(self.constants_label)
+
+        self.constants_table = QtWidgets.QTableWidget(0, 2)
+        self.constants_table.setHorizontalHeaderLabels(["Property ID", "Value"])
+        self.constants_table.verticalHeader().setVisible(False)
+        self.constants_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.constants_table.horizontalHeader().setStretchLastSection(True)
+        layout.addWidget(self.constants_table)
+
+    def _populate_constants_table(self):
+        """Fill the constants table from the loaded constants DataFrame."""
+        self.constants_table.setRowCount(len(self.constants_df))
+        for row, (_, row_data) in enumerate(self.constants_df.iterrows()):
+            prop_item = QtWidgets.QTableWidgetItem(str(row_data['property_id']))
+            val_item = QtWidgets.QTableWidgetItem(str(row_data['value']))
+            prop_item.setFlags(prop_item.flags() ^ QtCore.Qt.ItemFlag.ItemIsEditable)
+            val_item.setFlags(val_item.flags() ^ QtCore.Qt.ItemFlag.ItemIsEditable)
+            self.constants_table.setItem(row, 0, prop_item)
+            self.constants_table.setItem(row, 1, val_item)
+        self.constants_table.resizeColumnsToContents()
+
+    def set_columns(self, columns):
+        """Populate the mapping table with one row per column. Keys are normalized to strings."""
+        self.mapping_table.setRowCount(len(columns))
+        self.column_mapping = {}
+        self.duplicate_key_columns = set()
+        for row, col in enumerate(columns):
+            col_str = str(col)
+            col_item = QtWidgets.QTableWidgetItem(col_str)
+            col_item.setFlags(col_item.flags() ^ QtCore.Qt.ItemFlag.ItemIsEditable)
+            self.mapping_table.setItem(row, 0, col_item)
+
+            combo = QtWidgets.QComboBox()
+            combo.addItem("-- Select --", None)
+            for _, prop in self.properties_df.iterrows():
+                label = str(prop['label'])
+                pid = str(prop['property_id'])
+                combo.addItem(f"{label} ({pid})", pid)
+            combo.currentIndexChanged.connect(
+                lambda index, r=row, cb=combo: self._on_combo_changed(r, cb)
+            )
+            self.mapping_table.setCellWidget(row, 1, combo)
+            self.column_mapping[col_str] = None
+
+            # Duplicate key checkbox
+            check_item = QtWidgets.QTableWidgetItem()
+            check_item.setFlags(QtCore.Qt.ItemFlag.ItemIsUserCheckable | QtCore.Qt.ItemFlag.ItemIsEnabled)
+            check_item.setCheckState(QtCore.Qt.CheckState.Unchecked)
+            self.mapping_table.setItem(row, 2, check_item)
+
+        self.mapping_table.resizeColumnsToContents()
+
+    def set_preview_df(self, df):
+        """Store a preview DataFrame for AI mapping sample extraction."""
+        self.preview_df = df
+
+    def _on_combo_changed(self, row, combo):
+        """Update the mapping when a combo selection changes."""
+        col_name = self.mapping_table.item(row, 0).text()  # already a string
+        self.column_mapping[col_name] = combo.currentData()
+
+    def _suggest_mappings(self):
+        """Use fuzzy matching to set combo boxes automatically."""
+        columns = list(self.column_mapping.keys())  # strings
+        if not columns:
+            return
+        suggested = suggest_mappings(columns, self.properties_df)
+        for row in range(self.mapping_table.rowCount()):
+            col_name = self.mapping_table.item(row, 0).text()
+            pid = suggested.get(col_name)
+            combo = self.mapping_table.cellWidget(row, 1)
+            if pid:
+                idx = combo.findData(pid)
+                if idx >= 0:
+                    combo.setCurrentIndex(idx)
+                    self.column_mapping[col_name] = pid
+                else:
+                    combo.setCurrentIndex(0)
+                    self.column_mapping[col_name] = None
+            else:
+                combo.setCurrentIndex(0)
+                self.column_mapping[col_name] = None
+
+    def _ai_suggest_mappings(self):
+        """Call a remote AI mapping endpoint and apply suggested column mappings.
+
+        Reads the endpoint URL and API key from environment variables:
+            MORPHEUS_AI_ENDPOINT  (e.g. https://morpheus.nz/api/schema)
+            MORPHEUS_AI_API_KEY   (optional bearer token)
+        If not configured, shows a warning and falls back to local suggestion.
+        """
+        columns = list(self.column_mapping.keys())
+        if not columns:
+            QtWidgets.QMessageBox.warning(self, "No Columns", "No columns to map.")
+            return
+
+        if self.preview_df is None or self.preview_df.empty:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "No Data",
+                "No preview data available for AI suggestion."
+            )
+            return
+
+        # Build sample data: column headers + up to 5 sample rows
+        sample_df = self.preview_df.head(5)
+        samples = []
+        for _, row in sample_df.iterrows():
+            sample_row = []
+            for col in columns:
+                value = row.get(col, "")
+                if pd.isna(value):
+                    value = ""
+                sample_row.append(str(value))
+            samples.append(sample_row)
+
+        # Gemini integration (takes precedence when explicitly configured)
+        gemini_api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+        gemini_model_env = os.environ.get("GEMINI_MODEL", "").strip()
+        gemini_model = gemini_model_env if gemini_model_env else "gemini-3.5-flash"
+        if not gemini_api_key and gemini_model_env:
+            # Fallback to MORPHEUS_AI_API_KEY only when GEMINI_MODEL is explicitly set
+            # (i.e., user intended Gemini but may have used the generic variable name).
+            gemini_api_key = os.environ.get("MORPHEUS_AI_API_KEY", "").strip()
+        if gemini_api_key:
+            gemini_mappings = suggest_mappings_with_gemini(columns, samples, gemini_api_key, gemini_model)
+            if gemini_mappings:
+                # Map column -> label -> property_id using local reference table
+                label_to_pid = {}
+                for _, prop in self.properties_df.iterrows():
+                    label = str(prop["label"]).strip().lower()
+                    pid = str(prop["property_id"]).strip()
+                    label_to_pid[label] = pid
+
+                applied_count = 0
+                for entry in gemini_mappings:
+                    col = entry.get("column")
+                    label = entry.get("label")
+                    if not col or not label:
+                        continue
+                    if col not in self.column_mapping:
+                        continue
+                    label_lower = str(label).strip().lower()
+                    pid = label_to_pid.get(label_lower)
+                    if pid is None:
+                        temp_mapping = suggest_mappings([col], self.properties_df)
+                        pid = temp_mapping.get(col)
+                    if pid:
+                        row = list(self.column_mapping.keys()).index(col)
+                        combo = self.mapping_table.cellWidget(row, 1)
+                        if combo:
+                            idx = combo.findData(pid)
+                            if idx >= 0:
+                                combo.setCurrentIndex(idx)
+                                self.column_mapping[col] = pid
+                                applied_count += 1
+
+                if applied_count == 0:
+                    QtWidgets.QMessageBox.information(
+                        self, "Gemini Mapping", "Gemini returned no usable mapping suggestions."
+                    )
+                else:
+                    QtWidgets.QMessageBox.information(
+                        self, "Gemini Mapping", f"Gemini mapping applied for {applied_count} column(s)."
+                    )
+                return
+            else:
+                QtWidgets.QMessageBox.information(
+                    self,
+                    "Gemini Mapping",
+                    "Gemini did not return suggestions. Falling back to local suggestion."
+                )
+                self._suggest_mappings()
+                return
+
+        # Existing Morpheus endpoint path (only used when no Gemini key is present)
+        endpoint = os.environ.get("MORPHEUS_AI_ENDPOINT", "").strip()
+        if not endpoint:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "AI Endpoint Not Configured",
+                "The AI mapping endpoint is not configured.\n\n"
+                "Set the MORPHEUS_AI_ENDPOINT environment variable to use AI mapping.\n"
+                "Falling back to local suggestion."
+            )
+            self._suggest_mappings()
+            return
+
+        payload = {
+            "columns": columns,
+            "samples": samples
+        }
+        headers = {"Content-Type": "application/json"}
+        api_key = os.environ.get("MORPHEUS_AI_API_KEY", "").strip()
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        try:
+            response = requests.post(endpoint, json=payload, headers=headers, timeout=15)
+            response.raise_for_status()
+            result = response.json()
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "AI Mapping Failed",
+                f"Could not contact the AI endpoint:\n{e}\n\nFalling back to local suggestion."
+            )
+            self._suggest_mappings()
+            return
+
+        # Parse response: expected {"mappings":[{"column":"col1","label":"inception"}, ...]}
+        mappings = result.get("mappings", [])
+        if not isinstance(mappings, list):
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Invalid AI Response",
+                "The AI endpoint returned an unexpected response.\nFalling back to local suggestion."
+            )
+            self._suggest_mappings()
+            return
+
+        # Map label -> property_id using local reference table
+        label_to_pid = {}
+        for _, prop in self.properties_df.iterrows():
+            label = str(prop["label"]).strip().lower()
+            pid = str(prop["property_id"]).strip()
+            label_to_pid[label] = pid
+
+        # Apply mappings for each returned entry
+        applied_count = 0
+        for entry in mappings:
+            col = entry.get("column")
+            label = entry.get("label")
+            if not col or not label:
+                continue
+            if col not in self.column_mapping:
+                continue
+            label_lower = str(label).strip().lower()
+            # Try exact label match first, then fuzzy match
+            pid = label_to_pid.get(label_lower)
+            if pid is None:
+                # fuzzy match using suggest_mappings for this single column
+                temp_mapping = suggest_mappings([col], self.properties_df)
+                pid = temp_mapping.get(col)
+            if pid:
+                row = list(self.column_mapping.keys()).index(col)
+                combo = self.mapping_table.cellWidget(row, 1)
+                if combo:
+                    idx = combo.findData(pid)
+                    if idx >= 0:
+                        combo.setCurrentIndex(idx)
+                        self.column_mapping[col] = pid
+                        applied_count += 1
+
+        if applied_count == 0:
+            QtWidgets.QMessageBox.information(
+                self,
+                "AI Mapping",
+                "The AI endpoint returned no usable mapping suggestions."
+            )
+        else:
+            QtWidgets.QMessageBox.information(
+                self,
+                "AI Mapping",
+                f"AI mapping applied for {applied_count} column(s)."
+            )
+
+    def get_column_mapping(self):
+        """Return the current mapping as a dict column_name -> property_id."""
+        return self.column_mapping
+
+    def get_duplicate_key_columns(self):
+        """Return a list of column names marked as duplicate keys."""
+        duplicate_cols = []
+        for row in range(self.mapping_table.rowCount()):
+            check_item = self.mapping_table.item(row, 2)
+            if check_item and check_item.checkState() == QtCore.Qt.CheckState.Checked:
+                col_name = self.mapping_table.item(row, 0).text()
+                duplicate_cols.append(col_name)
+        return duplicate_cols
