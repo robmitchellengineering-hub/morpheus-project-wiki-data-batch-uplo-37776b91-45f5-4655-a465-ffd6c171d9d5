@@ -39,29 +39,18 @@ def _get_env_snapshot() -> dict:
         'SYSTEMROOT', 'TEMP', 'TMP', 'OS', 'COMPUTERNAME',
         'PROCESSOR_ARCHITECTURE', 'PATH',
     ]
-    return {key: os.environ.get(key, '<not set>') for key in env_keys}
-
-
-def _get_ai_config_snapshot() -> dict:
-    """Return AI mapping configuration status — Morpheus Connect first
-    (the primary path), then the Advanced custom endpoint if that's what's
-    actually configured instead. No env vars anymore (2026-09-15): AI
-    mapping config used to be read from MORPHEUS_AI_ENDPOINT/
-    MORPHEUS_AI_API_KEY/GEMINI_API_KEY/GEMINI_MODEL; it's now Settings ->
-    Connect to Morpheus (or the Advanced endpoint fields), so that's what
-    this reports instead."""
-    try:
-        from core import credential_storage
-        from core import settings as app_settings
-        connected = bool(credential_storage.load_morpheus_token())
-        snapshot = {'morpheus_connect': 'connected' if connected else 'not connected'}
-        if not connected:
-            endpoint = app_settings.get_ai_endpoint_url()
-            snapshot['advanced_endpoint'] = endpoint if endpoint else '<not set>'
-            snapshot['advanced_api_key'] = f'<set, length {len(app_settings.get_ai_api_key())}>' if app_settings.get_ai_api_key() else '<not set>'
-        return snapshot
-    except Exception as exc:
-        return {'error': f'Could not read AI config: {exc}'}
+    snapshot = {key: os.environ.get(key, '<not set>') for key in env_keys}
+    # Redact potential secret values, but note presence.
+    for key in ('MORPHEUS_AI_ENDPOINT', 'MORPHEUS_AI_API_KEY', 'GEMINI_API_KEY', 'GEMINI_MODEL'):
+        value = os.environ.get(key)
+        if value is None:
+            snapshot[key] = '<not set>'
+        else:
+            if 'KEY' in key or 'SECRET' in key:
+                snapshot[key] = f'<set, length {len(value)}>'
+            else:
+                snapshot[key] = value
+    return snapshot
 
 
 def _get_package_versions() -> dict:
@@ -88,23 +77,21 @@ def _run_import_tests() -> dict:
         'core.credential_storage',
         'core.data_loader',
         'core.duplicate_checker',
-        'core.morpheus_connect',
+        'core.gemini_adapter',
         'core.lazy_loader',
         'core.metadata_extractor',
-        'core.photo_metadata_merge',
         'core.reference_tables',
+        'core.schema_ai',
         'core.schema_mapper',
         'core.settings',
         'core.uploader',
         'core.validator',
         'core.workers',
         'ui.auth_dialog',
-        'ui.connect_dialog',
         'ui.image_preview',
         'ui.main_window',
         'ui.mapping_panel',
         'ui.mapping_view',
-        'ui.photo_fill_dialog',
         'ui.preview_table',
         'ui.reference_table_editor',
         'ui.settings_dialog',
@@ -151,10 +138,6 @@ def run_diagnostics(base_dir=None) -> None:
     lines.append("")
     lines.append("--- Environment snapshot ---")
     for key, value in _get_env_snapshot().items():
-        lines.append(f"  {key} = {value}")
-    lines.append("")
-    lines.append("--- AI mapping configuration ---")
-    for key, value in _get_ai_config_snapshot().items():
         lines.append(f"  {key} = {value}")
     lines.append("")
     lines.append("--- Package versions ---")
