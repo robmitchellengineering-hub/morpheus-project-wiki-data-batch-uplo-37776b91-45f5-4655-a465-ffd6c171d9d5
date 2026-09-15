@@ -54,6 +54,7 @@ def main():
         ('PyQt6', 'data'),
         ('pandas', 'submodules'),
         ('pandas', 'data'),
+        ('sparqlslurper', 'data'),
     ]
 
     app_name = 'WikiDataBatchUploader_debug' if console_mode else 'WikiDataBatchUploader'
