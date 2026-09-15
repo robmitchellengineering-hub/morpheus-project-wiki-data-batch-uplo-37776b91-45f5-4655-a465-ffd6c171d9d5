@@ -37,16 +37,19 @@ def main():
     else:
         print('Building standard windowed version.')
 
-    # Remove any stale PyInstaller spec files to ensure command-line options are used.
+    # Remove any stale PyInstaller spec files from the project root.
     for name in os.listdir('.'):
         if name.endswith('.spec'):
             os.remove(name)
 
-    # Clean previous build output to avoid stale artifacts
+    # Clean previous build output and work directories to avoid stale artifacts
+    # and spec files. This ensures command-line options are used.
     dist_dir = os.path.join(os.getcwd(), 'dist')
-    if os.path.exists(dist_dir):
-        print(f'Cleaning previous build directory {dist_dir}')
-        shutil.rmtree(dist_dir, ignore_errors=True)
+    build_dir = os.path.join(os.getcwd(), 'build')
+    for dir_path in (dist_dir, build_dir):
+        if os.path.exists(dir_path):
+            print(f'Cleaning previous build directory {dir_path}')
+            shutil.rmtree(dir_path, ignore_errors=True)
 
     # Collect PyQt6 and pandas dependencies explicitly; PyInstaller hooks handle the rest.
     collect_packages = [
@@ -54,7 +57,14 @@ def main():
         ('PyQt6', 'data'),
         ('pandas', 'submodules'),
         ('pandas', 'data'),
+        ('wikidataintegrator', 'submodules'),
+        ('wikidataintegrator', 'data'),
+        ('pyshex', 'submodules'),
+        ('pyshex', 'data'),
+        ('sparqlslurper', 'submodules'),
         ('sparqlslurper', 'data'),
+        ('lxml', 'submodules'),
+        ('lxml', 'data'),
     ]
 
     app_name = 'WikiDataBatchUploader_debug' if console_mode else 'WikiDataBatchUploader'
@@ -83,6 +93,7 @@ def main():
         '--hidden-import', 'PyQt6.QtWidgets',
         '--hidden-import', 'PyQt6.QtNetwork',
         '--hidden-import', 'pkg_resources',
+        '--hidden-import', 'setuptools',
         '--exclude-module', 'matplotlib',
         '--exclude-module', 'scipy',
         '--exclude-module', 'IPython',
