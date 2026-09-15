@@ -75,36 +75,59 @@ class MappingPanel(QtWidgets.QWidget):
             self.constants_table.setItem(row, 1, val_item)
         self.constants_table.resizeColumnsToContents()
 
+    def _add_mapping_row(self, col_str):
+        """Append one mapping-table row for col_str and register it in
+        column_mapping. Shared by set_columns (fresh table) and add_columns
+        (appending to an existing one) so both stay in sync."""
+        row = self.mapping_table.rowCount()
+        self.mapping_table.insertRow(row)
+
+        col_item = QtWidgets.QTableWidgetItem(col_str)
+        col_item.setFlags(col_item.flags() ^ QtCore.Qt.ItemFlag.ItemIsEditable)
+        self.mapping_table.setItem(row, 0, col_item)
+
+        combo = QtWidgets.QComboBox()
+        combo.addItem("-- Select --", None)
+        for _, prop in self.properties_df.iterrows():
+            label = str(prop['label'])
+            pid = str(prop['property_id'])
+            combo.addItem(f"{label} ({pid})", pid)
+        combo.currentIndexChanged.connect(
+            lambda index, r=row, cb=combo: self._on_combo_changed(r, cb)
+        )
+        self.mapping_table.setCellWidget(row, 1, combo)
+        self.column_mapping[col_str] = None
+
+        # Duplicate key checkbox
+        check_item = QtWidgets.QTableWidgetItem()
+        check_item.setFlags(QtCore.Qt.ItemFlag.ItemIsUserCheckable | QtCore.Qt.ItemFlag.ItemIsEnabled)
+        check_item.setCheckState(QtCore.Qt.CheckState.Unchecked)
+        self.mapping_table.setItem(row, 2, check_item)
+
     def set_columns(self, columns):
-        """Populate the mapping table with one row per column. Keys are normalized to strings."""
-        self.mapping_table.setRowCount(len(columns))
+        """Populate the mapping table with one row per column, discarding
+        any existing mapping. Keys are normalized to strings."""
+        self.mapping_table.setRowCount(0)
         self.column_mapping = {}
         self.duplicate_key_columns = set()
-        for row, col in enumerate(columns):
-            col_str = str(col)
-            col_item = QtWidgets.QTableWidgetItem(col_str)
-            col_item.setFlags(col_item.flags() ^ QtCore.Qt.ItemFlag.ItemIsEditable)
-            self.mapping_table.setItem(row, 0, col_item)
-
-            combo = QtWidgets.QComboBox()
-            combo.addItem("-- Select --", None)
-            for _, prop in self.properties_df.iterrows():
-                label = str(prop['label'])
-                pid = str(prop['property_id'])
-                combo.addItem(f"{label} ({pid})", pid)
-            combo.currentIndexChanged.connect(
-                lambda index, r=row, cb=combo: self._on_combo_changed(r, cb)
-            )
-            self.mapping_table.setCellWidget(row, 1, combo)
-            self.column_mapping[col_str] = None
-
-            # Duplicate key checkbox
-            check_item = QtWidgets.QTableWidgetItem()
-            check_item.setFlags(QtCore.Qt.ItemFlag.ItemIsUserCheckable | QtCore.Qt.ItemFlag.ItemIsEnabled)
-            check_item.setCheckState(QtCore.Qt.CheckState.Unchecked)
-            self.mapping_table.setItem(row, 2, check_item)
-
+        for col in columns:
+            self._add_mapping_row(str(col))
         self.mapping_table.resizeColumnsToContents()
+
+    def add_columns(self, new_columns):
+        """Append mapping rows for columns not already present, leaving
+        existing rows (and their mappings/duplicate-key checks) untouched --
+        e.g. after core.photo_metadata_merge adds columns to already-mapped
+        data, so a prior mapping pass isn't lost."""
+        added = False
+        for col in new_columns:
+            col_str = str(col)
+            if col_str in self.column_mapping:
+                continue
+            self._add_mapping_row(col_str)
+            added = True
+        if added:
+            self.mapping_table.resizeColumnsToContents()
 
     def set_preview_df(self, df):
         """Store a preview DataFrame for AI mapping sample extraction."""

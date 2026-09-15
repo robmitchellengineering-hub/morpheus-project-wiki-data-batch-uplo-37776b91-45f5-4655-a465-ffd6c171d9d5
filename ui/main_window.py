@@ -311,7 +311,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 df = load_dataframe_preview(full_path)
                 self.current_dataframe = df
                 self.current_file_path = full_path
-                self.mapping_view.set_preview(df, full_path)
+                image_extensions = {'.jpg', '.jpeg', '.png', '.tif', '.tiff'}
+                image_paths = [p for p in self.full_paths if os.path.splitext(p)[1].lower() in image_extensions]
+                self.mapping_view.set_preview(df, full_path, image_paths)
                 self.central_placeholder.setText('Preview mode: showing first 500 rows. Full data loads on dry-run or upload.')
                 self.central_stack.setCurrentWidget(self.mapping_view)
             except Exception as e:

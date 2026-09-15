@@ -3,9 +3,11 @@ from core.reference_tables import ensure_sample_reference_tables, load_wikidata_
 from ui.preview_table import PreviewTableWidget
 from ui.mapping_panel import MappingPanel
 from ui.auth_dialog import AuthDialog
+from ui.photo_fill_dialog import PhotoFillDialog
 from core import uploader
 from core import settings as app_settings
 from core.duplicate_checker import find_duplicate_rows_within_batch, find_existing_items
+from core.photo_metadata_merge import merge_photo_metadata, summary_to_text
 from config import REFERENCE_TABLES_DIR
 
 
@@ -86,6 +88,7 @@ class MappingView(QtWidgets.QWidget):
         self.preview_df = None
         self.full_df = None
         self.file_path = None
+        self.image_paths = []  # photo files found alongside the current spreadsheet
         self.login_object = None
         self._upload_thread = None
         self._data_loading_thread = None
@@ -131,6 +134,10 @@ class MappingView(QtWidgets.QWidget):
         upload_layout.addWidget(self.status_label)
 
         button_layout = QtWidgets.QHBoxLayout()
+        self.photo_fill_button = QtWidgets.QPushButton("Fill from Photos...")
+        self.photo_fill_button.clicked.connect(self._run_photo_fill)
+        button_layout.addWidget(self.photo_fill_button)
+
         self.dry_run_button = QtWidgets.QPushButton("Dry Run")
         self.dry_run_button.clicked.connect(self._run_dry_run)
         button_layout.addWidget(self.dry_run_button)
@@ -149,11 +156,16 @@ class MappingView(QtWidgets.QWidget):
         main_layout.addWidget(self.splitter, stretch=1)
         main_layout.addWidget(upload_widget, stretch=0)
 
-    def set_preview(self, df, file_path):
-        """Set the preview dataframe and file path; reset full data cache and invalidate any running load."""
+    def set_preview(self, df, file_path, image_paths=None):
+        """Set the preview dataframe and file path; reset full data cache and invalidate any running load.
+
+        image_paths: photo files found alongside this spreadsheet (same
+        folder scan as the sidebar), used by "Fill from Photos...".
+        """
         self._data_loading_generation += 1  # invalidate any in-flight load
         self.preview_df = df
         self.file_path = file_path
+        self.image_paths = image_paths or []
         self.full_df = None
         self._pending_callback = None
         self.preview_table.set_dataframe(df)
@@ -188,6 +200,42 @@ class MappingView(QtWidgets.QWidget):
             self.mapping_panel.set_preview_df(self.preview_df)
         # Reset status? Not necessary, but we can note that mapping is refreshed.
         self.status_label.setText("Reference tables updated; mappings refreshed.")
+
+    def _run_photo_fill(self):
+        if self.preview_df is None:
+            QtWidgets.QMessageBox.warning(self, "No Data", "No dataframe loaded.")
+            return
+        if not self.image_paths:
+            QtWidgets.QMessageBox.information(
+                self, "No Photos Found",
+                "No photo files (.jpg/.jpeg/.png/.tif/.tiff) were found in this folder."
+            )
+            return
+        dialog = PhotoFillDialog(self.preview_df.columns, len(self.image_paths), self)
+        if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return
+        filename_column, fields, overwrite = dialog.get_choices()
+        self._ensure_full_data(lambda: self._perform_photo_fill(filename_column, fields, overwrite))
+
+    def _perform_photo_fill(self, filename_column, fields, overwrite):
+        if self.full_df is None:
+            return
+        try:
+            merged_df, summary = merge_photo_metadata(
+                self.full_df, filename_column, self.image_paths, fields, overwrite=overwrite
+            )
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Fill from Photos Error", str(e))
+            return
+
+        self.full_df = merged_df
+        self.preview_df = merged_df.head(500)
+        self.preview_table.set_dataframe(self.preview_df)
+        # Add rows only for the newly-added columns -- preserves any mapping
+        # already made on existing columns instead of wiping it.
+        self.mapping_panel.add_columns(summary['columns_added'])
+        self.mapping_panel.set_preview_df(self.preview_df)
+        self.status_label.setText(summary_to_text(summary))
 
     def _run_dry_run(self):
         if self.preview_df is None:
@@ -283,6 +331,7 @@ class MappingView(QtWidgets.QWidget):
                 skip_rows = set(self.existing_item_rows)
 
         self._upload_in_progress = True
+        self.photo_fill_button.setEnabled(False)
         self.dry_run_button.setEnabled(False)
         self.upload_button.setEnabled(False)
         self.existing_items_button.setEnabled(False)
@@ -326,6 +375,7 @@ class MappingView(QtWidgets.QWidget):
         mapping = self.mapping_panel.get_column_mapping()
 
         self._upload_in_progress = True  # prevent other operations while checking
+        self.photo_fill_button.setEnabled(False)
         self.dry_run_button.setEnabled(False)
         self.upload_button.setEnabled(False)
         self.existing_items_button.setEnabled(False)
@@ -367,6 +417,7 @@ class MappingView(QtWidgets.QWidget):
             QtWidgets.QMessageBox.warning(self, "No File", "No file path available.")
             return
         # Disable buttons and show loading status
+        self.photo_fill_button.setEnabled(False)
         self.dry_run_button.setEnabled(False)
         self.upload_button.setEnabled(False)
         self.existing_items_button.setEnabled(False)
@@ -423,6 +474,7 @@ class MappingView(QtWidgets.QWidget):
         """Enable upload buttons only if no upload/check is currently running."""
         if self._upload_in_progress:
             return
+        self.photo_fill_button.setEnabled(True)
         self.dry_run_button.setEnabled(True)
         self.upload_button.setEnabled(True)
         self.existing_items_button.setEnabled(True)

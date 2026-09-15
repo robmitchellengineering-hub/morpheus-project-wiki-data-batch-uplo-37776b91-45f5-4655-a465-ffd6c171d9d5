@@ -7,6 +7,7 @@ A Windows desktop client for bulk-uploading datasets to Wikidata, with an interf
 - Scan local folders for data sheets (`.xlsx`, `.csv`) and images (`.jpg`, `.jpeg`, `.png`, `.tif`, `.tiff`).
 - Load tabular data into a preview grid for review.
 - Extract image metadata locally: EXIF, GPS, camera make/model, IPTC, XMP, PNG text chunks.
+- **Fill fields from photo metadata**: match spreadsheet rows to photos by filename and pull GPS coordinates, date taken, and camera model straight into new columns — ready to map to a property like P625 (coordinate location).
 - Schema mapping: match spreadsheet columns to Wikidata properties using local reference tables, with fuzzy suggestions.
 - Project constants: apply fixed statements (e.g., instance of (P31) = village (Q532)) to every uploaded item.
 - Secure bot-password and OAuth authentication (credentials encrypted via Windows DPAPI).
@@ -124,6 +125,16 @@ You can use the **Check Existing Items** button to query Wikidata for items that
 - After the check, when you click **Upload**, you will be asked whether to skip these rows. You can choose to skip them (recommended) or upload them anyway.
 
 **Important:** The duplicate key columns should contain values that are both distinctive and stable for a given entity (e.g., a unique identifier, a combination of name and location). Using poorly chosen keys may result in false positives.
+
+## Filling Fields from Photo Metadata
+
+If your spreadsheet has a column naming each row's photo file, and those photos are in the same folder as the spreadsheet, click **Fill from Photos...** to pull data straight from each photo's EXIF/IPTC metadata into new columns:
+
+- **GPS coordinates** → a `GPS Coordinates` column, formatted as `latitude,longitude`. Map this column to **P625 (coordinate location)** and it uploads as a real Wikidata globe-coordinate claim (not just text).
+- **Date taken** → a `Date Taken` column (`YYYY-MM-DD`), from the photo's EXIF `DateTimeOriginal`.
+- **Camera model** → a `Camera Model` column, from the photo's EXIF `Model` tag.
+
+Rows are matched to photos by filename (with or without the extension, case-insensitive). Only empty cells are filled unless you check **Overwrite existing values**. Any row without a matching photo, or a matching photo with no GPS/date/camera data, is left untouched and counted in the summary shown after the fill runs.
 
 ## AI-Powered Schema Mapping
 
