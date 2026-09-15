@@ -233,6 +233,24 @@ To avoid overloading Wikidata, you can set a delay between row uploads (Settings
 
 The app also respects Wikidata's maxlag parameter. You can set the maximum number of seconds of lag you are willing to accept in the Settings menu (default: 5 seconds). If the server reports a higher lag, the app will automatically retry up to 3 times, waiting 10 seconds between attempts, before reporting an error. The maxlag value is now correctly passed to the Wikidata API via the library's configuration, ensuring the setting takes effect. This helps avoid overwhelming the Wikidata servers during periods of high load.
 
+## Diagnostic Mode
+
+You can generate a detailed diagnostic report to help troubleshoot startup or import issues without launching the full GUI.
+
+1. Open a Command Prompt in the folder containing `WikiDataBatchUploader.exe` (or `WikiDataBatchUploader_debug.exe`).
+2. Run:
+
+   ```
+   WikiDataBatchUploader.exe --diagnose
+   ```
+
+   (In PowerShell, use `./WikiDataBatchUploader.exe --diagnose`.)
+
+3. The app will not open the main window. Instead, it will inspect the Python environment, list installed package versions, attempt to import every core and UI module, and record any failures with full tracebacks.
+4. The report is saved to `%APPDATA%\WikidataBatchUploader\diagnostic_report.txt`. A timestamp is included in the file contents; repeated runs overwrite the file.
+
+If the main application crashes on startup, a `crash_log.txt` is also written to that same folder, containing the uncaught exception traceback. Include these files when seeking support.
+
 ## Troubleshooting
 
 **The `.exe` doesn't start or crashes instantly**
