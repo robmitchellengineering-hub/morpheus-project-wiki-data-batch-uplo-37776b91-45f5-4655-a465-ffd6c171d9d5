@@ -263,6 +263,16 @@ The app also respects Wikidata's maxlag parameter. You can set the maximum numbe
 - The SPARQL query may return no results if the values do not match any item's statements exactly. Try using a more distinctive combination of columns.
 - Network issues or Wikidata SPARQL endpoint downtime can prevent the check from completing; try again later.
 
+### Build-time missing module / file errors
+
+When building the Windows executable with PyInstaller, you may encounter one of the following errors:
+
+- **SystemError: `<class 'ImportError'>` returned a result with an exception set** — caused by a mismatch between `chardet` and PyInstaller. This is resolved by pinning `chardet==4.0.0` in `requirements-lock.txt`.
+- **ModuleNotFoundError: No module named 'pkg_resources'** — `pkg_resources` is part of `setuptools`. This is resolved by pinning `setuptools` and including the `pkg_resources` and `setuptools` hidden imports in `build.py`.
+- **FileNotFoundError: No such file or directory: '...sparqlslurper\\git_describe.txt'** — PyInstaller misses package data from transitive dependencies. This is resolved by collecting package data for `sparqlslurper` (and other dependencies) via `--collect-data`.
+
+The `build.py` script now includes comprehensive collection for `wikidataintegrator` and its dependencies (`pyshex`, `sparqlslurper`, `lxml`) using both `--collect-submodules` and `--collect-data`, ensuring that all transitive dependencies are bundled correctly. If you encounter a missing module/file error not listed here, please report it so the build script can be updated.
+
 ## License
 
 Your own. This is your tool. Use it responsibly.
