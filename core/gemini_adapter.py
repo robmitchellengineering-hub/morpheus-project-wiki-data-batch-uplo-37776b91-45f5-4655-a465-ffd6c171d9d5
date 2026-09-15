@@ -3,7 +3,7 @@ import requests
 from typing import List, Dict, Any, Optional
 
 
-def suggest_mappings_with_gemini(columns, samples, api_key, model='gemini-3.5-flash'):
+def suggest_mappings_with_gemini(columns: List[str], samples: List[List[str]], api_key: str, model: str = 'gemini-1.5-flash') -> List[Dict[str, str]]:
     """
     Use Google Gemini to suggest column-to-Wikidata property label mappings.
 
@@ -11,7 +11,7 @@ def suggest_mappings_with_gemini(columns, samples, api_key, model='gemini-3.5-fl
         columns: List of column names (strings).
         samples: List of sample rows (each a list of strings, matching columns order).
         api_key: Google Gemini API key.
-        model: Gemini model name (default 'gemini-3.5-flash').
+        model: Gemini model name (default 'gemini-1.5-flash').
 
     Returns:
         List of dicts with 'column' and 'label' keys, e.g.
@@ -48,6 +48,10 @@ def suggest_mappings_with_gemini(columns, samples, api_key, model='gemini-3.5-fl
         response = requests.post(url, json=payload, headers=headers, timeout=30)
         response.raise_for_status()
         result = response.json()
+    except Exception:
+        return []
+
+    try:
         candidates = result.get("candidates", [])
         if not candidates:
             return []
@@ -59,23 +63,27 @@ def suggest_mappings_with_gemini(columns, samples, api_key, model='gemini-3.5-fl
         text = parts[0].get("text", "")
         if not text:
             return []
+        # Remove markdown code fences if present
         text = text.strip()
         if text.startswith("```"):
-            text = text.split("\n", 1)[-1]
-            if text.endswith("```"):
-                text = text[:-3]
-            text = text.strip()
-        parsed = json.loads(text)
-        mappings = parsed.get("mappings", [])
+            lines = text.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            text = "\n".join(lines).strip()
+        # Parse JSON
+        data = json.loads(text)
+        mappings = data.get("mappings", [])
         if not isinstance(mappings, list):
             return []
-        valid = []
-        for entry in mappings:
-            if isinstance(entry, dict) and "column" in entry and "label" in entry:
-                valid.append({
-                    "column": str(entry["column"]),
-                    "label": str(entry["label"])
+        validated = []
+        for item in mappings:
+            if isinstance(item, dict) and "column" in item and "label" in item:
+                validated.append({
+                    "column": str(item["column"]),
+                    "label": str(item["label"])
                 })
-        return valid
+        return validated
     except Exception:
         return []
