@@ -14,7 +14,7 @@ def _ensure_base_dir() -> str:
     return base
 
 
-def _write_crash_log(exc_type, exc_value, exc_tb) -> None:
+def _write_crash_log() -> None:
     """Append crash details to crash_log.txt in the base directory."""
     import datetime
 
@@ -22,7 +22,7 @@ def _write_crash_log(exc_type, exc_value, exc_tb) -> None:
     log_path = os.path.join(base, 'crash_log.txt')
     with open(log_path, 'a', encoding='utf-8') as f:
         f.write(f"\n--- Crash {datetime.datetime.now().isoformat()} ---\n")
-        traceback.print_exception(exc_type, exc_value, exc_tb, file=f)
+        traceback.print_exc(file=f)
 
 
 if __name__ == "__main__":
@@ -50,5 +50,5 @@ if __name__ == "__main__":
         exit_code = app.exec()
         sys.exit(exit_code)
     except Exception:
-        _write_crash_log(*sys.exc_info())
+        _write_crash_log()
         raise
