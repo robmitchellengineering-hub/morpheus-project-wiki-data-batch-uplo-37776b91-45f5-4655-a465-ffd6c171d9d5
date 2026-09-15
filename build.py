@@ -6,11 +6,37 @@ import shutil
 
 EXE_NAME = "WikiDataBatchUploader.exe"
 
+COLLECT_PACKAGES = [
+    ('PyQt6', 'submodules'),
+    ('PyQt6', 'data'),
+    ('pandas', 'submodules'),
+    ('pandas', 'data'),
+    ('wikidataintegrator', 'submodules'),
+    ('wikidataintegrator', 'data'),
+    ('pyshex', 'submodules'),
+    ('pyshex', 'data'),
+    ('sparqlslurper', 'submodules'),
+    ('sparqlslurper', 'data'),
+    ('lxml', 'submodules'),
+    ('lxml', 'data'),
+]
 
-def smoke_test(exe_path):
+HIDDEN_IMPORTS = [
+    'PyQt6.QtCore', 'PyQt6.QtGui', 'PyQt6.QtWidgets', 'PyQt6.QtNetwork',
+    'pkg_resources', 'setuptools',
+]
+
+EXCLUDE_MODULES = [
+    'matplotlib', 'scipy', 'IPython', 'tkinter',
+    'PyQt6.QtWebEngineWidgets', 'PyQt6.QtPdf', 'PyQt6.QtQml',
+    'PyQt6.QtCharts', 'PyQt6.QtDataVisualization',
+]
+
+
+def smoke_test(executable_path):
     print('Running smoke test: launching executable...')
     try:
-        proc = subprocess.Popen([exe_path])
+        proc = subprocess.Popen([executable_path])
     except Exception as e:
         print(f'Failed to launch executable: {e}')
         sys.exit(1)
@@ -26,86 +52,33 @@ def smoke_test(exe_path):
         proc.kill()
 
 
-def main():
-    if os.name != 'nt':
-        print('This build script must be run on Windows. It cannot produce a Windows .exe on a non-Windows host.')
-        sys.exit(1)
-
-    console_mode = '--console' in sys.argv
-    if console_mode:
-        print('Building debug console version.')
-    else:
-        print('Building standard windowed version.')
-
-    # Remove any stale PyInstaller spec files from the project root.
+def _clean_previous_build():
     for name in os.listdir('.'):
         if name.endswith('.spec'):
             os.remove(name)
-
-    # Clean previous build output and work directories to avoid stale artifacts
-    # and spec files. This ensures command-line options are used.
     dist_dir = os.path.join(os.getcwd(), 'dist')
     build_dir = os.path.join(os.getcwd(), 'build')
     for dir_path in (dist_dir, build_dir):
         if os.path.exists(dir_path):
             print(f'Cleaning previous build directory {dir_path}')
             shutil.rmtree(dir_path, ignore_errors=True)
+    return dist_dir, build_dir
 
-    # Collect PyQt6 and pandas dependencies explicitly; PyInstaller hooks handle the rest.
-    collect_packages = [
-        ('PyQt6', 'submodules'),
-        ('PyQt6', 'data'),
-        ('pandas', 'submodules'),
-        ('pandas', 'data'),
-        ('wikidataintegrator', 'submodules'),
-        ('wikidataintegrator', 'data'),
-        ('pyshex', 'submodules'),
-        ('pyshex', 'data'),
-        ('sparqlslurper', 'submodules'),
-        ('sparqlslurper', 'data'),
-        ('lxml', 'submodules'),
-        ('lxml', 'data'),
-    ]
 
-    app_name = 'WikiDataBatchUploader_debug' if console_mode else 'WikiDataBatchUploader'
-    target_exe_name = app_name + '.exe'
-    cmd = [
-        sys.executable, '-m', 'PyInstaller',
-        '--onefile',
-    ]
-    if not console_mode:
-        cmd.append('--windowed')
-    cmd += ['--name', app_name,
-            '--clean', '--noconfirm',
-            '--distpath', 'dist',
-            '--workpath', 'build',
-            '--specpath', 'build',
-    ]
-    for pkg, flag in collect_packages:
-        if flag == 'submodules':
-            cmd += ['--collect-submodules', pkg]
-        else:
-            cmd += ['--collect-data', pkg]
+def _pyinstaller_base_cmd(app_name, dist_dir, build_dir):
+    cmd = [sys.executable, '-m', 'PyInstaller', '--onefile']
+    cmd += ['--name', app_name, '--clean', '--noconfirm',
+            '--distpath', dist_dir, '--workpath', build_dir, '--specpath', build_dir]
+    for pkg, flag in COLLECT_PACKAGES:
+        cmd += [f'--collect-{flag}', pkg]
+    for imp in HIDDEN_IMPORTS:
+        cmd += ['--hidden-import', imp]
+    for mod in EXCLUDE_MODULES:
+        cmd += ['--exclude-module', mod]
+    return cmd
 
-    cmd += [
-        '--hidden-import', 'PyQt6.QtCore',
-        '--hidden-import', 'PyQt6.QtGui',
-        '--hidden-import', 'PyQt6.QtWidgets',
-        '--hidden-import', 'PyQt6.QtNetwork',
-        '--hidden-import', 'pkg_resources',
-        '--hidden-import', 'setuptools',
-        '--exclude-module', 'matplotlib',
-        '--exclude-module', 'scipy',
-        '--exclude-module', 'IPython',
-        '--exclude-module', 'tkinter',
-        '--exclude-module', 'PyQt6.QtWebEngineWidgets',
-        '--exclude-module', 'PyQt6.QtPdf',
-        '--exclude-module', 'PyQt6.QtQml',
-        '--exclude-module', 'PyQt6.QtCharts',
-        '--exclude-module', 'PyQt6.QtDataVisualization',
-        'main.py'
-    ]
 
+def _run_pyinstaller(cmd):
     print('Running PyInstaller...')
     print(' '.join(cmd))
     result = subprocess.run(cmd, capture_output=True, text=True)
@@ -115,16 +88,32 @@ def main():
         print(result.stderr[-2000:])
         sys.exit(result.returncode)
 
+
+def build_windows(console_mode):
+    if console_mode:
+        print('Building debug console version.')
+    else:
+        print('Building standard windowed version.')
+
+    dist_dir, build_dir = _clean_previous_build()
+
+    app_name = 'WikiDataBatchUploader_debug' if console_mode else 'WikiDataBatchUploader'
+    target_exe_name = app_name + '.exe'
+    cmd = _pyinstaller_base_cmd(app_name, 'dist', 'build')
+    if not console_mode:
+        cmd.insert(3, '--windowed')  # after --onefile
+    cmd.append('main.py')
+
+    _run_pyinstaller(cmd)
+
     # PyInstaller may name the artifact differently (e.g., app.exe). Locate the
     # first .exe in dist/ and rename it to our target name.
     exe_path = os.path.join(dist_dir, target_exe_name)
     if not os.path.exists(exe_path):
-        # Find any .exe in dist/
         candidates = [f for f in os.listdir(dist_dir) if f.lower().endswith('.exe') and os.path.isfile(os.path.join(dist_dir, f))]
         if not candidates:
             print(f'PyInstaller produced no .exe in {dist_dir}.')
             sys.exit(1)
-        # Prefer an exe named app.exe if present, but any .exe works.
         source_path = None
         for candidate in candidates:
             if candidate.lower() == 'app.exe':
@@ -145,6 +134,60 @@ def main():
 
     smoke_test(exe_path)
     print('Build complete. Executable is in dist/')
+
+
+def build_macos(console_mode):
+    # Mirrors build_windows above -- same PyInstaller args/collected
+    # packages, since PyQt6/pandas/wikidataintegrator etc. need the same
+    # explicit submodule/data collection on every platform (PyInstaller's
+    # default import-following can't see them either way). What differs:
+    # --windowed produces a real .app bundle here (not a plain .exe), and
+    # the bundle needs an --osx-bundle-id; the smoke test launches the
+    # binary inside Contents/MacOS/ instead of a top-level .exe.
+    if console_mode:
+        print('Building debug console version.')
+    else:
+        print('Building standard windowed version.')
+
+    dist_dir, build_dir = _clean_previous_build()
+
+    app_name = 'WikiDataBatchUploader_debug' if console_mode else 'WikiDataBatchUploader'
+    cmd = _pyinstaller_base_cmd(app_name, 'dist', 'build')
+    if not console_mode:
+        cmd.insert(3, '--windowed')  # after --onefile
+        cmd.insert(4, '--osx-bundle-id')
+        cmd.insert(5, 'com.valiantmusic.wikidatauploader')
+    cmd.append('main.py')
+
+    _run_pyinstaller(cmd)
+
+    if console_mode:
+        # --onefile without --windowed produces a plain executable on
+        # macOS too, not a .app bundle.
+        executable_path = os.path.join(dist_dir, app_name)
+        if not os.path.exists(executable_path) or os.path.getsize(executable_path) == 0:
+            print(f'PyInstaller produced no valid executable at expected location: {executable_path}')
+            sys.exit(1)
+    else:
+        app_bundle = os.path.join(dist_dir, app_name + '.app')
+        executable_path = os.path.join(app_bundle, 'Contents', 'MacOS', app_name)
+        if not os.path.isdir(app_bundle) or not os.path.exists(executable_path):
+            print(f'PyInstaller produced no valid .app bundle at expected location: {app_bundle}')
+            sys.exit(1)
+
+    smoke_test(executable_path)
+    print('Build complete. Output is in dist/')
+
+
+def main():
+    console_mode = '--console' in sys.argv
+    if os.name == 'nt':
+        build_windows(console_mode)
+    elif sys.platform == 'darwin':
+        build_macos(console_mode)
+    else:
+        print(f'This build script supports Windows and macOS only (detected: {sys.platform}).')
+        sys.exit(1)
 
 
 if __name__ == '__main__':
