@@ -1,183 +1,272 @@
 import os
-import sys
 import json
-import base64
-import ctypes
-from ctypes import wintypes
+import logging
 from typing import Optional, Dict
 
 from config import BASE_DIR
 
+# Try to use keyring; if it's not available (e.g., dependency missing),
+# fall back to a local file with restricted permissions.
+try:
+    import keyring
+except ImportError:  # pragma: no cover - keyring is a required dependency
+    keyring = None
+
+logger = logging.getLogger(__name__)
+
+SERVICE_NAME = "WikiDataBatchUploader"
+CREDENTIAL_KEY = "credentials"
+MORPHEUS_TOKEN_KEY = "morpheus_token"
+
+# OAuth credential keys stored individually in the keyring
+OAUTH_KEYS = ['consumer_key', 'consumer_secret', 'access_token', 'access_secret']
+
+# Fallback file paths (used only if keyring is unavailable or fails)
 CREDENTIAL_FILE = BASE_DIR / 'credentials.dat'
-# Separate file from CREDENTIAL_FILE (Wikidata bot login) — a shared blob
-# would mean any change here risks corrupting or overwriting the operator's
-# already-working Wikidata credentials, for no benefit.
+OAUTH_FILE = BASE_DIR / 'oauth_credentials.dat'
 MORPHEUS_TOKEN_FILE = BASE_DIR / 'morpheus_token.dat'
 
-# Constants for CryptProtectData/CryptUnprotectData
-CRYPTPROTECT_UI_FORBIDDEN = 0x01
 
-class DATA_BLOB(ctypes.Structure):
-    _fields_ = [
-        ('cbData', wintypes.DWORD),
-        ('pbData', ctypes.POINTER(ctypes.c_char))
-    ]
-
-def _blob_to_bytes(blob: DATA_BLOB) -> bytes:
-    if not blob.pbData:
-        return b''
-    return ctypes.string_at(blob.pbData, blob.cbData)
-
-def _encrypt_bytes(data: bytes) -> Optional[bytes]:
-    """Encrypt bytes using Windows DPAPI (CryptProtectData)."""
-    if sys.platform != 'win32':
-        return None
-
-    data_in = DATA_BLOB()
-    data_in.cbData = len(data)
-    # Keep buffer alive by storing in local variable
-    input_buffer = ctypes.create_string_buffer(data, len(data))
-    data_in.pbData = ctypes.cast(input_buffer, ctypes.POINTER(ctypes.c_char))
-
-    data_out = DATA_BLOB()
-
-    if not ctypes.windll.crypt32.CryptProtectData(
-        ctypes.byref(data_in),
-        None,
-        None,
-        None,
-        None,
-        CRYPTPROTECT_UI_FORBIDDEN,
-        ctypes.byref(data_out)
-    ):
-        return None
-
+def _file_save(path, data: str) -> bool:
+    """Fallback: store data in a local file with 0600 permissions."""
     try:
-        return _blob_to_bytes(data_out)
-    finally:
-        ctypes.windll.kernel32.LocalFree(data_out.pbData)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(data)
+        os.chmod(path, 0o600)
+        return True
+    except Exception:
+        return False
 
-def _decrypt_bytes(blob: bytes) -> Optional[bytes]:
-    """Decrypt bytes using Windows DPAPI (CryptUnprotectData)."""
-    if sys.platform != 'win32':
+
+def _file_load(path) -> Optional[str]:
+    """Fallback: read data from a local file (if it exists)."""
+    if not path.exists():
         return None
-
-    data_in = DATA_BLOB()
-    data_in.cbData = len(blob)
-    # Keep buffer alive by storing in local variable
-    input_buffer = ctypes.create_string_buffer(blob, len(blob))
-    data_in.pbData = ctypes.cast(input_buffer, ctypes.POINTER(ctypes.c_char))
-
-    data_out = DATA_BLOB()
-
-    if not ctypes.windll.crypt32.CryptUnprotectData(
-        ctypes.byref(data_in),
-        None,
-        None,
-        None,
-        None,
-        CRYPTPROTECT_UI_FORBIDDEN,
-        ctypes.byref(data_out)
-    ):
-        return None
-
     try:
-        return _blob_to_bytes(data_out)
-    finally:
-        ctypes.windll.kernel32.LocalFree(data_out.pbData)
+        return path.read_text(encoding='utf-8')
+    except Exception:
+        return None
+
+
+def _file_delete(path) -> None:
+    """Fallback: delete a local file, ignoring errors."""
+    try:
+        if path.exists():
+            path.unlink()
+    except Exception:
+        pass
+
+
+def _keyring_set(service: str, key: str, value: str) -> bool:
+    """Set a password in keyring. Returns True on success, False on any error."""
+    if keyring is None:
+        return False
+    try:
+        keyring.set_password(service, key, value)
+        return True
+    except Exception:
+        logger.warning("Keyring backend unavailable; using local file fallback.")
+        return False
+
+
+def _keyring_get(service: str, key: str) -> Optional[str]:
+    """Get a password from keyring. Returns None if not found or on error."""
+    if keyring is None:
+        return None
+    try:
+        return keyring.get_password(service, key)
+    except Exception:
+        logger.warning("Keyring backend unavailable; using local file fallback.")
+        return None
+
+
+def _keyring_delete(service: str, key: str) -> None:
+    """Delete a password from keyring, ignoring errors."""
+    if keyring is None:
+        return
+    try:
+        keyring.delete_password(service, key)
+    except Exception:
+        pass
+
 
 def save_credentials(credentials: Dict[str, str]) -> bool:
-    """Encrypt and save credentials to disk using DPAPI.
+    """Save Wikidata login credentials.
+
+    Uses the OS keyring (Windows Credential Locker, macOS Keychain, Linux
+    Secret Service) when available, falling back to a local file with
+    restricted permissions if no keyring backend is found.
 
     Args:
-        credentials: dictionary containing credential fields, including
+        credentials: Dictionary containing credential fields, including
             'type' ('bot' or 'oauth') and the corresponding values.
 
     Returns:
         True if saved successfully, False otherwise.
     """
-    if sys.platform != 'win32':
+    try:
+        json_data = json.dumps(credentials)
+    except (TypeError, ValueError):
         return False
 
-    try:
-        json_data = json.dumps(credentials).encode('utf-8')
-        encrypted = _encrypt_bytes(json_data)
-        if encrypted is None:
-            return False
-        encoded = base64.b64encode(encrypted).decode('ascii')
-        with open(CREDENTIAL_FILE, 'w') as f:
-            f.write(encoded)
+    # Try keyring first
+    if _keyring_set(SERVICE_NAME, CREDENTIAL_KEY, json_data):
         return True
-    except Exception:
-        return False
+
+    # Fallback to file
+    if _file_save(CREDENTIAL_FILE, json_data):
+        logger.warning("Using local file fallback for credential storage.")
+        return True
+    return False
+
 
 def load_credentials() -> Optional[Dict[str, str]]:
-    """Load and decrypt saved credentials.
+    """Load saved Wikidata login credentials.
 
     Returns:
-        Dictionary of credentials if available and decryption succeeds,
-        otherwise None.
+        Dictionary of credentials if available and readable, otherwise None.
     """
-    if sys.platform != 'win32':
-        return None
-
-    if not CREDENTIAL_FILE.exists():
-        return None
-
-    try:
-        encoded = CREDENTIAL_FILE.read_text()
-        encrypted = base64.b64decode(encoded)
-        decrypted = _decrypt_bytes(encrypted)
-        if decrypted is None:
+    # Try keyring first
+    data = _keyring_get(SERVICE_NAME, CREDENTIAL_KEY)
+    if data is not None:
+        try:
+            return json.loads(data)
+        except json.JSONDecodeError:
             return None
-        return json.loads(decrypted.decode('utf-8'))
-    except Exception:
-        return None
+
+    # Fallback to file
+    data = _file_load(CREDENTIAL_FILE)
+    if data is not None:
+        try:
+            return json.loads(data)
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
+def delete_credentials() -> None:
+    """Delete saved Wikidata login credentials from keyring and fallback file.
+
+    Best-effort; never raises. If no credentials are stored, this is a no-op.
+    """
+    _keyring_delete(SERVICE_NAME, CREDENTIAL_KEY)
+    _file_delete(CREDENTIAL_FILE)
+
+
+def save_oauth_credentials(consumer_key: str, consumer_secret: str, access_token: str, access_secret: str) -> bool:
+    """Save Wikidata OAuth 1.0a credentials as separate keyring entries.
+
+    Uses the OS keyring when possible; otherwise falls back to a local
+    restricted-permission file containing all four tokens.
+
+    Returns:
+        True if saved successfully, False otherwise.
+    """
+    creds = {
+        'consumer_key': consumer_key,
+        'consumer_secret': consumer_secret,
+        'access_token': access_token,
+        'access_secret': access_secret,
+    }
+
+    # Try keyring first, storing each token under its own key
+    success = True
+    for field in OAUTH_KEYS:
+        key_name = f'oauth_{field}'
+        if not _keyring_set(SERVICE_NAME, key_name, creds[field]):
+            success = False
+            break
+    if success:
+        return True
+
+    # Fallback to file
+    try:
+        json_data = json.dumps(creds)
+    except (TypeError, ValueError):
+        return False
+
+    if _file_save(OAUTH_FILE, json_data):
+        # Clean up any partial keyring entries to avoid inconsistency
+        for field in OAUTH_KEYS:
+            _keyring_delete(SERVICE_NAME, f'oauth_{field}')
+        logger.warning("Using local file fallback for OAuth credential storage.")
+        return True
+    return False
+
+
+def load_oauth_credentials() -> Optional[Dict[str, str]]:
+    """Load saved Wikidata OAuth 1.0a credentials.
+
+    Returns:
+        Dictionary with keys 'consumer_key', 'consumer_secret', 'access_token',
+        'access_secret' if all four values are available, otherwise None.
+    """
+    creds = {}
+
+    # Try keyring first
+    missing = False
+    for field in OAUTH_KEYS:
+        val = _keyring_get(SERVICE_NAME, f'oauth_{field}')
+        if val is None:
+            missing = True
+            break
+        creds[field] = val
+
+    if not missing and len(creds) == 4:
+        return creds
+
+    # Fallback to file
+    data = _file_load(OAUTH_FILE)
+    if data is not None:
+        try:
+            data_dict = json.loads(data)
+            if all(field in data_dict for field in OAUTH_KEYS):
+                return data_dict
+        except json.JSONDecodeError:
+            pass
+    return None
+
+
+def delete_oauth_credentials() -> None:
+    """Delete saved OAuth credentials from keyring and fallback file.
+
+    Best-effort; never raises.
+    """
+    for field in OAUTH_KEYS:
+        _keyring_delete(SERVICE_NAME, f'oauth_{field}')
+    _file_delete(OAUTH_FILE)
 
 
 def save_morpheus_token(token: str) -> bool:
-    """Encrypt and save a Morpheus Connect device token (dvc_...) to disk
-    using DPAPI, same as the Wikidata credentials but in a separate file."""
-    if sys.platform != 'win32':
-        return False
-    try:
-        encrypted = _encrypt_bytes(token.encode('utf-8'))
-        if encrypted is None:
-            return False
-        encoded = base64.b64encode(encrypted).decode('ascii')
-        with open(MORPHEUS_TOKEN_FILE, 'w') as f:
-            f.write(encoded)
+    """Save a Morpheus Connect device token (dvc_...) securely."""
+    # Try keyring first
+    if _keyring_set(SERVICE_NAME, MORPHEUS_TOKEN_KEY, token):
         return True
-    except Exception:
-        return False
+
+    # Fallback to file
+    if _file_save(MORPHEUS_TOKEN_FILE, token):
+        logger.warning("Using local file fallback for Morpheus token storage.")
+        return True
+    return False
 
 
 def load_morpheus_token() -> Optional[str]:
-    """Load and decrypt the saved Morpheus Connect device token.
+    """Load the saved Morpheus Connect device token.
 
-    Returns the token string if available and decryption succeeds,
-    otherwise None (not connected yet, or running off-Windows).
+    Returns the token string if available, otherwise None.
     """
-    if sys.platform != 'win32':
-        return None
-    if not MORPHEUS_TOKEN_FILE.exists():
-        return None
-    try:
-        encoded = MORPHEUS_TOKEN_FILE.read_text()
-        encrypted = base64.b64decode(encoded)
-        decrypted = _decrypt_bytes(encrypted)
-        if decrypted is None:
-            return None
-        return decrypted.decode('utf-8')
-    except Exception:
-        return None
+    # Try keyring first
+    data = _keyring_get(SERVICE_NAME, MORPHEUS_TOKEN_KEY)
+    if data is not None:
+        return data
+
+    # Fallback to file
+    return _file_load(MORPHEUS_TOKEN_FILE)
 
 
 def clear_morpheus_token() -> None:
     """Remove the saved Morpheus Connect device token (Settings ->
     Disconnect). Best-effort; never raises."""
-    try:
-        if MORPHEUS_TOKEN_FILE.exists():
-            MORPHEUS_TOKEN_FILE.unlink()
-    except Exception:
-        pass
+    _keyring_delete(SERVICE_NAME, MORPHEUS_TOKEN_KEY)
+    _file_delete(MORPHEUS_TOKEN_FILE)
