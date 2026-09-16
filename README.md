@@ -10,7 +10,7 @@ A Windows desktop client for bulk-uploading datasets to Wikidata, with an interf
 - **Fill fields from photo metadata**: match spreadsheet rows to photos by filename and pull GPS coordinates, date taken, and camera model straight into new columns — ready to map to a property like P625 (coordinate location).
 - Schema mapping: match spreadsheet columns to Wikidata properties using local reference tables, with fuzzy suggestions.
 - Project constants: apply fixed statements (e.g., instance of (P31) = village (Q532)) to every uploaded item.
-- Secure bot-password and OAuth authentication (credentials encrypted via Windows DPAPI).
+- Secure bot-password and OAuth authentication (credentials stored in the operating system's secure keyring — Windows Credential Locker, macOS Keychain, or Linux Secret Service).
 - Dry-run preview with validation before any write.
 - Live upload via WikidataIntegrator, with configurable delay between rows to respect rate limits.
 - Persistent settings (edit summary, upload delay) stored in the Windows registry.
@@ -224,7 +224,9 @@ The application supports two authentication methods: **bot passwords** and **OAu
 - After registration, you will receive four values: **Consumer key**, **Consumer secret**, **Access token**, and **Access secret**.
 - In the login dialog, check **Use OAuth 1.0a** and enter those four values.
 
-Credentials are entered only when you initiate an upload. They are encrypted using Windows DPAPI and stored securely in the user's AppData directory. They are not stored in plaintext.
+Credentials are entered only when you initiate an upload. They are stored securely using the operating system's native keyring service — Windows Credential Locker, macOS Keychain, or Linux Secret Service. They are not stored in plaintext.
+
+> **Note for upgrading from a previous Windows build:** Earlier versions stored credentials using Windows DPAPI. After upgrading to this cross-platform version, you will need to re-enter your credentials once. The old credentials cannot be automatically migrated.
 
 ## Validation & Rate Limiting
 
