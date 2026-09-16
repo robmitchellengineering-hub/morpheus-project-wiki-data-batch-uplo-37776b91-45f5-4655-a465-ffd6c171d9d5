@@ -168,6 +168,7 @@ def build_macos(console_mode):
         if not os.path.exists(executable_path) or os.path.getsize(executable_path) == 0:
             print(f'PyInstaller produced no valid executable at expected location: {executable_path}')
             sys.exit(1)
+        smoke_test(executable_path)
     else:
         app_bundle = os.path.join(dist_dir, app_name + '.app')
         executable_path = os.path.join(app_bundle, 'Contents', 'MacOS', app_name)
@@ -175,18 +176,85 @@ def build_macos(console_mode):
             print(f'PyInstaller produced no valid .app bundle at expected location: {app_bundle}')
             sys.exit(1)
 
-    smoke_test(executable_path)
+        smoke_test(executable_path)
+
+        # Wrap the .app bundle into a distributable DMG.
+        dmg_path = os.path.join(dist_dir, 'WikiDataBatchUploader.dmg')
+        dmg_cmd = [
+            'hdiutil', 'create',
+            '-volname', 'WikiDataBatchUploader',
+            '-srcfolder', app_bundle,
+            '-ov', '-format', 'UDZO',
+            dmg_path
+        ]
+        print('Creating DMG...')
+        result = subprocess.run(dmg_cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            print('hdiutil failed. Output:')
+            print(result.stdout[-2000:])
+            print(result.stderr[-2000:])
+            sys.exit(result.returncode)
+        if not os.path.exists(dmg_path) or os.path.getsize(dmg_path) == 0:
+            print('hdiutil produced no valid DMG.')
+            sys.exit(1)
+        print(f'DMG created: {dmg_path}')
+
     print('Build complete. Output is in dist/')
 
 
+def build_linux(console_mode):
+    if console_mode:
+        print('Building debug console version.')
+    else:
+        print('Building standard version.')
+
+    dist_dir, build_dir = _clean_previous_build()
+
+    app_name = 'WikiDataBatchUploader_debug' if console_mode else 'WikiDataBatchUploader'
+    cmd = _pyinstaller_base_cmd(app_name, 'dist', 'build')
+    cmd.append('main.py')
+
+    _run_pyinstaller(cmd)
+
+    executable_path = os.path.join(dist_dir, app_name)
+    if not os.path.exists(executable_path) or os.path.getsize(executable_path) == 0:
+        print(f'PyInstaller produced no valid executable at expected location: {executable_path}')
+        sys.exit(1)
+
+    smoke_test(executable_path)
+    print('Build complete. Executable is in dist/')
+
+
+def print_usage():
+    print("Usage: python build.py [--console] [--help]")
+    print("Builds the Wikidata Batch Uploader for the current platform.")
+    print()
+    print("Options:")
+    print("  --console   Build a debug console version (with terminal output)")
+    print("  --help      Show this help message and exit")
+    print()
+    print("Supported platforms:")
+    print("  Windows     Produces dist/WikiDataBatchUploader.exe")
+    print("              (or dist/WikiDataBatchUploader_debug.exe with --console)")
+    print("  macOS       Produces dist/WikiDataBatchUploader.dmg")
+    print("              (or a plain executable with --console)")
+    print("  Linux       Produces dist/WikiDataBatchUploader")
+    print("              (or dist/WikiDataBatchUploader_debug with --console)")
+
+
 def main():
+    if '--help' in sys.argv or '-h' in sys.argv:
+        print_usage()
+        return
     console_mode = '--console' in sys.argv
     if os.name == 'nt':
         build_windows(console_mode)
     elif sys.platform == 'darwin':
         build_macos(console_mode)
+    elif sys.platform.startswith('linux'):
+        build_linux(console_mode)
     else:
-        print(f'This build script supports Windows and macOS only (detected: {sys.platform}).')
+        print(f'This build script supports Windows, macOS, and Linux only (detected: {sys.platform}).')
         sys.exit(1)
 
 
