@@ -20,7 +20,7 @@ A Windows desktop client for bulk-uploading datasets to Wikidata, with an interf
 
 ## Requirements
 
-- Windows 10 or later (for running the packaged `.exe`).
+- Windows 10 or later, macOS 11 or later, or a modern Linux distribution (for running the packaged application).
 - Python 3.10 or later (for development and building from source).
 - Dependencies listed in `requirements.txt`.
   - **Note:** PyInstaller is required for building the executable but is **not** included in `requirements.txt` (to keep runtime dependencies minimal). Install it separately with `pip install pyinstaller`.
@@ -41,7 +41,7 @@ A Windows desktop client for bulk-uploading datasets to Wikidata, with an interf
    python main.py
    ```
 
-## Building the Windows Executable
+## Building the Application
 
 A single, reproducible build is defined in `requirements-lock.txt` and `build.py` at the repository root. Do not use any other build scripts; they are obsolete.
 
@@ -57,18 +57,16 @@ A single, reproducible build is defined in `requirements-lock.txt` and `build.py
    python build.py
    ```
 
-   This runs PyInstaller with `--onefile` and `--windowed`, producing a standalone executable. The build script:
-   - Enforces that it is run on Windows.
-   - Assumes all dependencies (including PyInstaller) are already installed via `pip install -r requirements-lock.txt`.
-   - Collects all required packages via `--collect-all`.
-   - Verifies that `dist/WikiDataBatchUploader.exe` exists and is non-empty.
-   - Performs a startup smoke test: launches the exe, waits 5 seconds, and fails the build if it exits early.
+   The build script detects your operating system and produces the appropriate standalone artifact:
+   - **Windows**: a single `.exe` at `dist/WikiDataBatchUploader.exe`.
+   - **macOS**: a `.dmg` at `dist/WikiDataBatchUploader.dmg`.
+   - **Linux**: a standalone binary at `dist/WikiDataBatchUploader`.
 
-   The CI workflow (`.github/workflows/build.yml`) performs an additional 10-second smoke test after building.
+   It assumes all dependencies (including PyInstaller) are already installed via `pip install -r requirements-lock.txt`, collects all required packages via `--collect-all`, verifies that the output artifact exists and is non-empty, and performs a startup smoke test: launches the built application, waits 5 seconds, and fails the build if it exits early.
 
-3. The executable will be located at `dist/WikiDataBatchUploader.exe`.
+   The CI workflow (`.github/workflows/build.yml`) builds all three platforms in parallel and performs smoke tests on each.
 
-You can distribute this single `.exe` file. No Python installation is required on the target machine.
+You can distribute this single self-contained artifact. No Python installation is required on the target machine.
 
 ### Debug Console Build
 
@@ -196,10 +194,11 @@ When you run the app, it checks for these files. If they are missing, sample fil
 
 **Location:**
 - **Development mode**: In the project root, alongside `main.py`.
-- **Packaged `.exe` mode**: In a user-writable directory:
+- **Packaged app mode**: In a user-writable directory:
   - Windows: `%APPDATA%\WikidataBatchUploader\reference_tables`
-  - (The base folder `%APPDATA%\WikidataBatchUploader` is created automatically.)
-  This location ensures that changes you make to the reference tables persist between runs and do not require administrator rights.
+  - macOS: `~/Library/Application Support/WikidataBatchUploader/reference_tables`
+  - Linux: `$XDG_DATA_HOME/WikidataBatchUploader/reference_tables` (or `~/.local/share/WikidataBatchUploader/reference_tables` if `$XDG_DATA_HOME` is not set)
+  The base folder is created automatically. This location ensures that changes you make to the reference tables persist between runs and do not require administrator rights.
 
 You can edit these files with Excel to customize property labels and project constants.
 
