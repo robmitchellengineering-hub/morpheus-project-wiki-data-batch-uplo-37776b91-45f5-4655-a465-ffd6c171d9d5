@@ -14,3 +14,4 @@ certifi==2024.6.2
 idna==3.7
 charset-normalizer==3.3.2
 lxml==5.2.1
+keyring==24.3.1
