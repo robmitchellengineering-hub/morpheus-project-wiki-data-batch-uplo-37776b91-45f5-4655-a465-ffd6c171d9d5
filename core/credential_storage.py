@@ -270,3 +270,90 @@ def clear_morpheus_token() -> None:
     Disconnect). Best-effort; never raises."""
     _keyring_delete(SERVICE_NAME, MORPHEUS_TOKEN_KEY)
     _file_delete(MORPHEUS_TOKEN_FILE)
+
+
+# --- Commons OAuth credentials ---
+COMMONS_SERVICE_NAME = "WikidataBatchUploader-Commons"
+COMMONS_OAUTH_KEYS = ['consumer_key', 'consumer_secret', 'access_token', 'access_secret']
+COMMONS_OAUTH_FILE = BASE_DIR / 'commons_oauth_credentials.dat'
+
+
+def save_commons_oauth(consumer_key: str, consumer_secret: str, access_token: str, access_secret: str) -> bool:
+    """Save Commons OAuth 1.0a credentials for Commons uploads.
+
+    Stored under a separate service name to avoid collisions with Wikidata
+    credentials. Uses keyring when available; falls back to a local file.
+
+    Returns:
+        True if saved successfully, False otherwise.
+    """
+    creds = {
+        'consumer_key': consumer_key,
+        'consumer_secret': consumer_secret,
+        'access_token': access_token,
+        'access_secret': access_secret,
+    }
+
+    # Try keyring first, storing each token under its own key
+    success = True
+    for field in COMMONS_OAUTH_KEYS:
+        key_name = f'oauth_{field}'
+        if not _keyring_set(COMMONS_SERVICE_NAME, key_name, creds[field]):
+            success = False
+            break
+    if success:
+        return True
+
+    # Fallback to file
+    try:
+        json_data = json.dumps(creds)
+    except (TypeError, ValueError):
+        return False
+
+    if _file_save(COMMONS_OAUTH_FILE, json_data):
+        # Clean up any partial keyring entries to avoid inconsistency
+        for field in COMMONS_OAUTH_KEYS:
+            _keyring_delete(COMMONS_SERVICE_NAME, f'oauth_{field}')
+        logger.warning("Using local file fallback for Commons OAuth credential storage.")
+        return True
+    return False
+
+
+def load_commons_oauth() -> Optional[Dict[str, str]]:
+    """Load saved Commons OAuth credentials.
+
+    Returns:
+        Dictionary with keys 'consumer_key', 'consumer_secret', 'access_token',
+        'access_secret' if all four values are available, otherwise None.
+    """
+    creds = {}
+
+    # Try keyring first
+    missing = False
+    for field in COMMONS_OAUTH_KEYS:
+        val = _keyring_get(COMMONS_SERVICE_NAME, f'oauth_{field}')
+        if val is None:
+            missing = True
+            break
+        creds[field] = val
+
+    if not missing and len(creds) == 4:
+        return creds
+
+    # Fallback to file
+    data = _file_load(COMMONS_OAUTH_FILE)
+    if data is not None:
+        try:
+            data_dict = json.loads(data)
+            if all(field in data_dict for field in COMMONS_OAUTH_KEYS):
+                return data_dict
+        except json.JSONDecodeError:
+            pass
+    return None
+
+
+def clear_commons_oauth() -> None:
+    """Delete saved Commons OAuth credentials from keyring and fallback file."""
+    for field in COMMONS_OAUTH_KEYS:
+        _keyring_delete(COMMONS_SERVICE_NAME, f'oauth_{field}')
+    _file_delete(COMMONS_OAUTH_FILE)
