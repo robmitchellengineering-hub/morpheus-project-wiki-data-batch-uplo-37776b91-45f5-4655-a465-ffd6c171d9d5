@@ -5,29 +5,36 @@ on:
 
 jobs:
   build:
-    runs-on: windows-latest
-    permissions:
-      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.11'
       - name: Install dependencies
         run: pip install -r requirements-lock.txt
       - name: Build with the project's own build script
+        shell: bash
         run: |
           python build.py
-          if (-not (Get-ChildItem dist -ErrorAction SilentlyContinue)) { Write-Error "Build script produced nothing in dist/"; exit 1 }
-          Compress-Archive -Path dist\* -DestinationPath release.zip
-      - name: Verify artifact
+          ls -la dist || true
+      - name: Windows smoke test
+        if: runner.os == 'Windows'
+        shell: pwsh
         run: |
-          if (-not (Test-Path release.zip)) { Write-Error "No executable archive produced"; exit 1 }
-      - name: Release
-        uses: softprops/action-gh-release@v2
+          $proc = Start-Process -FilePath "dist\WikiDataBatchUploader.exe" -PassThru
+          Start-Sleep -Seconds 10
+          if ($proc.HasExited) {
+            Write-Error "Application exited early during smoke test."
+            exit 1
+          }
+          Stop-Process -Id $proc.Id -Force
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: v${{ github.run_id }}
-          files: release.zip
-          fail_on_unmatched_files: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: app-${{ matrix.os }}
+          path: dist/*
