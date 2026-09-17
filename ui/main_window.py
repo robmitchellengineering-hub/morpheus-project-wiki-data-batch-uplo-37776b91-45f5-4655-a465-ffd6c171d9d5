@@ -7,10 +7,12 @@ from ui.mapping_view import MappingView
 from ui.image_preview import ImagePreviewWidget
 from ui.settings_dialog import SettingsDialog
 from ui.reference_table_editor import ReferenceTableEditor
+from ui.commons_upload_dialog import CommonsUploadDialog
 from core.data_loader import load_dataframe_preview
 from core.lazy_loader import DataLoadingWorker
-from core.workers import DryRunWorker, UploadWorker, DuplicateCheckExistingWorker
+from core.workers import DryRunWorker, UploadWorker, DuplicateCheckExistingWorker, CommonsUploadWorker
 from core.reference_tables import ensure_sample_reference_tables
+from core.settings import get_commons_default_category, get_commons_license_template, get_commons_edit_summary
 from config import REFERENCE_TABLES_DIR
 
 
@@ -35,6 +37,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._dry_run_worker = None
         self._upload_worker = None
         self._duplicate_check_worker = None
+        self._commons_upload_worker = None
 
         # Callback storage for worker signals (so we can connect to bound methods)
         self._dry_run_on_finished = None
@@ -45,11 +48,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self._duplicate_check_on_progress = None
         self._duplicate_check_on_finished = None
         self._duplicate_check_on_error = None
+        self._commons_upload_on_progress = None
+        self._commons_upload_on_finished = None
+        self._commons_upload_on_error = None
 
     def _create_actions(self):
         self.open_folder_action = QtGui.QAction('Open Folder...', self)
         self.open_folder_action.setShortcut('Ctrl+O')
         self.open_folder_action.triggered.connect(self.open_folder_dialog)
+
+        self.commons_upload_action = QtGui.QAction('Upload to Wikimedia Commons...', self)
+        self.commons_upload_action.setShortcut('Ctrl+U')
+        self.commons_upload_action.triggered.connect(self.open_commons_upload_dialog)
 
         self.settings_action = QtGui.QAction('Settings...', self)
         self.settings_action.triggered.connect(self.open_settings_dialog)
@@ -64,6 +74,7 @@ class MainWindow(QtWidgets.QMainWindow):
         menubar = self.menuBar()
         file_menu = menubar.addMenu('File')
         file_menu.addAction(self.open_folder_action)
+        file_menu.addAction(self.commons_upload_action)
         file_menu.addSeparator()
         file_menu.addAction(self.edit_ref_tables_action)
         file_menu.addAction(self.settings_action)
@@ -113,6 +124,90 @@ class MainWindow(QtWidgets.QMainWindow):
         dialog = ReferenceTableEditor(self)
         if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
             self.mapping_view.reload_reference_data()
+
+    def open_commons_upload_dialog(self):
+        """Open the Commons upload dialog and start a background worker if accepted."""
+        dialog = CommonsUploadDialog(self)
+        if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+            queue = dialog.get_upload_queue()
+            if not queue:
+                return
+            # Separate parallel lists for the worker
+            file_paths = [item[0] for item in queue]
+            metadata_list = [item[1] for item in queue]
+            category = get_commons_default_category()
+            license_template = get_commons_license_template()
+            edit_summary = get_commons_edit_summary()
+
+            self.start_commons_upload_worker(
+                file_paths, metadata_list, category, license_template, edit_summary,
+                on_progress=self._on_commons_upload_progress,
+                on_finished=self._on_commons_upload_finished,
+                on_error=self._on_commons_upload_error
+            )
+
+    def start_commons_upload_worker(self, file_paths, metadata_list, category, license_template, edit_summary,
+                                    on_progress, on_finished, on_error, chunk_size=None):
+        """Start a Commons upload in a background thread.
+
+        Args:
+            file_paths: List of full paths to media files to upload.
+            metadata_list: List of metadata dictionaries, parallel to file_paths.
+            category: Commons category to apply.
+            license_template: License template to apply.
+            edit_summary: Edit summary for the uploads.
+            on_progress: Callback receiving (done, total, message) per file.
+            on_finished: Callback receiving the summary string.
+            on_error: Callback receiving the error message string.
+            chunk_size: Optional chunk size for chunked uploads.
+        """
+        if self._commons_upload_worker is not None and self._commons_upload_worker.isRunning():
+            return
+        self._commons_upload_on_progress = on_progress
+        self._commons_upload_on_finished = on_finished
+        self._commons_upload_on_error = on_error
+        worker = CommonsUploadWorker(
+            file_paths, metadata_list, category, license_template, edit_summary,
+            chunk_size=chunk_size, parent=self
+        )
+        worker.progress.connect(self._handle_commons_upload_progress)
+        worker.finished.connect(self._handle_commons_upload_finished)
+        worker.error.connect(self._handle_commons_upload_error)
+        self._commons_upload_worker = worker
+        worker.start()
+
+    def _handle_commons_upload_progress(self, done, total, message):
+        if self._commons_upload_on_progress:
+            self._commons_upload_on_progress(done, total, message)
+
+    def _handle_commons_upload_finished(self, summary):
+        self._clear_worker('_commons_upload_worker')
+        callback = self._commons_upload_on_finished
+        self._commons_upload_on_progress = None
+        self._commons_upload_on_finished = None
+        self._commons_upload_on_error = None
+        if callback:
+            callback(summary)
+
+    def _handle_commons_upload_error(self, msg):
+        self._clear_worker('_commons_upload_worker')
+        callback = self._commons_upload_on_error
+        self._commons_upload_on_progress = None
+        self._commons_upload_on_finished = None
+        self._commons_upload_on_error = None
+        if callback:
+            callback(msg)
+
+    def _on_commons_upload_progress(self, done, total, message):
+        self.statusBar().showMessage(f"Uploading {done}/{total}: {message}")
+
+    def _on_commons_upload_finished(self, summary):
+        self.statusBar().clearMessage()
+        QtWidgets.QMessageBox.information(self, "Commons Upload Complete", summary)
+
+    def _on_commons_upload_error(self, msg):
+        self.statusBar().clearMessage()
+        QtWidgets.QMessageBox.critical(self, "Commons Upload Error", msg)
 
     def scan_folder(self, folder):
         supported_extensions = {'.xlsx', '.csv', '.jpg', '.jpeg', '.png', '.tif', '.tiff'}
