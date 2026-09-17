@@ -296,6 +296,11 @@ class CommonsUploadDialog(QDialog):
         first = value.split(' ')[0]
         return first if first else None
 
+    def get_upload_queue(self):
+        """Return the current upload queue as a list of (file_path, metadata_dict)."""
+        self._save_current_metadata()
+        return [(path, self.file_metadata[path]) for path in self.file_paths if path in self.file_metadata]
+
     def _on_accept(self):
         self._save_current_metadata()
         if not self.file_paths:
