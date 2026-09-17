@@ -90,3 +90,51 @@ class DuplicateCheckExistingWorker(QThread):
             self.error.emit(str(e))
         finally:
             self.finished.emit(found)
+
+
+class CommonsUploadWorker(QThread):
+    """Worker thread for uploading files to Wikimedia Commons."""
+    progress = pyqtSignal(int, int, str)  # done, total, message
+    finished = pyqtSignal(str)            # summary string
+    error = pyqtSignal(str)
+
+    def __init__(self, file_paths, metadata_list, category, license_template, edit_summary,
+                 chunk_size=None, parent=None):
+        super().__init__(parent)
+        self.file_paths = list(file_paths)
+        self.metadata_list = list(metadata_list)
+        self.category = category
+        self.license_template = license_template
+        self.edit_summary = edit_summary
+        self.chunk_size = chunk_size
+
+    def run(self):
+        try:
+            import os
+            from core.commons_uploader import upload_file
+
+            if len(self.file_paths) != len(self.metadata_list):
+                raise ValueError("File list and metadata list lengths do not match.")
+
+            total = len(self.file_paths)
+            success_count = 0
+            errors = []
+
+            for i, (file_path, metadata) in enumerate(zip(self.file_paths, self.metadata_list)):
+                try:
+                    merged_metadata = dict(metadata)
+                    merged_metadata.setdefault('category', self.category)
+                    merged_metadata.setdefault('license_template', self.license_template)
+                    upload_file(file_path, merged_metadata, edit_summary=self.edit_summary)
+                    success_count += 1
+                    self.progress.emit(i + 1, total, os.path.basename(file_path))
+                except Exception as e:
+                    errors.append(f"{os.path.basename(file_path)}: {e}")
+                    self.progress.emit(i + 1, total, f"ERROR: {e}")
+
+            summary = f"{success_count} of {total} file(s) uploaded successfully."
+            if errors:
+                summary += "\nErrors:\n" + "\n".join(errors)
+            self.finished.emit(summary)
+        except Exception as e:
+            self.error.emit(str(e))
