@@ -1,6 +1,6 @@
 # WikiData Batch Uploader
 
-A Windows desktop client for bulk-uploading datasets to Wikidata, with an interface modeled after Wikidata itself.
+A cross-platform desktop client for bulk-uploading datasets to Wikidata, with an interface modeled after Wikidata itself.
 
 ## Features
 
@@ -13,10 +13,11 @@ A Windows desktop client for bulk-uploading datasets to Wikidata, with an interf
 - Secure bot-password and OAuth authentication (credentials stored in the operating system's secure keyring — Windows Credential Locker, macOS Keychain, or Linux Secret Service).
 - Dry-run preview with validation before any write.
 - Live upload via WikidataIntegrator, with configurable delay between rows to respect rate limits.
-- Persistent settings (edit summary, upload delay) stored in the Windows registry.
+- Persistent settings (edit summary, upload delay) stored using the operating system's native configuration mechanisms (Windows registry, macOS plist, Linux config file).
 - **Lazy loading** for large datasets: only the first 500 rows are shown initially; full data is loaded in the background only when needed for dry-run or upload.
 - **In-app reference table editing**: modify Wikidata property mappings and project constants directly from the application.
 - **Duplicate detection**: identify and optionally skip rows that appear to already exist on Wikidata, and detect duplicates within the input batch.
+- **Wikimedia Commons upload**: queue local media files, map metadata (description, category, license) from EXIF/IPTC or manual entry, and run a local pre-flight dry-run validation before uploading.
 
 ## Requirements
 
@@ -32,7 +33,7 @@ A Windows desktop client for bulk-uploading datasets to Wikidata, with an interf
 
    ```
    pip install -r requirements.txt
-   pip install pyinstaller   # only if you plan to build the exe
+   pip install pyinstaller   # only if you plan to build
    ```
 
 3. Run the application:
@@ -70,17 +71,17 @@ You can distribute this single self-contained artifact. No Python installation i
 
 ### Debug Console Build
 
-For troubleshooting crashes or diagnosing startup errors, build a debug version that opens a console window and displays stdout/stderr:
+For troubleshooting crashes or diagnosing startup errors, build a debug version that opens a console/terminal window and displays stdout/stderr:
 
 ```
 python build.py --console
 ```
 
-The resulting executable will be named `dist/WikiDataBatchUploader_debug.exe`. This version is not windowed, so you can see error messages that might be hidden in the standard windowed build. All heavy operations (dry-run, upload, duplicate check) run on background worker threads, and all UI updates from those threads are queued safely to the main GUI thread, ensuring thread safety and responsiveness.
+The resulting executable will be named `WikiDataBatchUploader_debug` with the appropriate platform extension (`.exe` on Windows, no extension on macOS/Linux). On macOS the debug version may be placed inside the `.app` bundle. This version is not windowed, so you can see error messages that might be hidden in the standard windowed build. All heavy operations (dry-run, upload, duplicate check) run on background worker threads, and all UI updates from those threads are queued safely to the main GUI thread, ensuring thread safety and responsiveness.
 
 ## Usage
 
-1. Launch `WikiDataBatchUploader.exe`.
+1. Launch the application (`WikiDataBatchUploader.exe` on Windows, the `.app` bundle on macOS, or the `WikiDataBatchUploader` binary on Linux).
 2. From the **File** menu, choose **Open Folder...** (Ctrl+O). Select a folder containing your data sheets and/or images.
 3. Files appear in the left sidebar. Click a file:
    - **Tabular files (`.xlsx`, `.csv`)**: Opens the preview and mapping view.
@@ -123,6 +124,31 @@ You can use the **Check Existing Items** button to query Wikidata for items that
 - After the check, when you click **Upload**, you will be asked whether to skip these rows. You can choose to skip them (recommended) or upload them anyway.
 
 **Important:** The duplicate key columns should contain values that are both distinctive and stable for a given entity (e.g., a unique identifier, a combination of name and location). Using poorly chosen keys may result in false positives.
+
+## Uploading to Wikimedia Commons
+
+The application can also upload media files (`.jpg`, `.jpeg`, `.png`, `.tif`, `.tiff`) to [Wikimedia Commons](https://commons.wikimedia.org). From the **File** menu choose **Upload to Wikimedia Commons...** (Ctrl+U). The dialog opens with a queue where you add files, preview them, and map metadata fields.
+
+### Metadata Mapping
+Each file can have the following fields set, either manually or automatically from the file's embedded metadata (EXIF/IPTC) where available:
+- **Description** — the file description shown on Commons (required).
+- **Category** — a Commons category applied to the upload.
+- **License template** — a valid Commons license template (default set in Settings).
+- **Date taken** — from EXIF `DateTimeOriginal` (optional).
+- **Author** — from metadata or manual entry.
+
+### Pre-flight Dry-Run Validation
+Before any data is sent to Commons, the **Validate (Dry Run)** button performs local checks on every file without writing anything:
+- The file exists and is readable.
+- The file extension is one of the supported image types.
+- Required metadata (description, category, license template) is present and non-empty.
+- The license template resolves to a known Commons-compatible template (basic pattern check).
+- Optional fields are well-formed (e.g., date format).
+
+If validation passes, a summary is shown and you can proceed to **Upload**. If any file fails, the errors are listed and upload is blocked until resolved.
+
+### Upload
+When you click **Upload**, the files are uploaded one by one in a background worker using your stored Commons OAuth credentials. Progress is shown in the status bar. A summary is displayed at the end, including any per-file errors. You must have configured Commons credentials first via **Settings**; the application reuses the same keyring as Wikidata credentials.
 
 ## Filling Fields from Photo Metadata
 
@@ -245,27 +271,27 @@ The app also respects Wikidata's maxlag parameter. You can set the maximum numbe
 
 You can generate a detailed diagnostic report to help troubleshoot startup or import issues without launching the full GUI.
 
-1. Open a Command Prompt in the folder containing `WikiDataBatchUploader.exe` (or `WikiDataBatchUploader_debug.exe`).
+1. Open a terminal (Windows Command Prompt, Terminal on macOS/Linux) in the directory containing the application.
 2. Run:
 
    ```
-   WikiDataBatchUploader.exe --diagnose
+   WikiDataBatchUploader --diagnose
    ```
 
-   (In PowerShell, use `./WikiDataBatchUploader.exe --diagnose`.)
+   (On Windows, use `WikiDataBatchUploader.exe --diagnose`.)
 
 3. The app will not open the main window. Instead, it will inspect the Python environment, list installed package versions, attempt to import every core and UI module, and record any failures with full tracebacks.
-4. The report is saved to `%APPDATA%\WikidataBatchUploader\diagnostic_report.txt`. A timestamp is included in the file contents; repeated runs overwrite the file.
+4. The report is saved to the platform-specific data directory: Windows `%APPDATA%\WikidataBatchUploader\diagnostic_report.txt`, macOS `~/Library/Application Support/WikidataBatchUploader/diagnostic_report.txt`, Linux `$XDG_DATA_HOME/WikidataBatchUploader/diagnostic_report.txt` (or `~/.local/share/WikidataBatchUploader/diagnostic_report.txt`). A timestamp is included in the file contents; repeated runs overwrite the file.
 
 If the main application crashes on startup, a `crash_log.txt` is also written to that same folder, containing the uncaught exception traceback. Include these files when seeking support.
 
 ## Troubleshooting
 
-**The `.exe` doesn't start or crashes instantly**
-- Ensure your system has the latest Visual C++ Redistributable (if unsure, install it).
+**The packaged app doesn't start or crashes instantly**
+- On Windows, ensure your system has the latest Visual C++ Redistributable (if unsure, install it). On macOS/Linux no extra runtime is typically needed.
 - Check that your data files are not corrupted.
 - Run the development version (`python main.py`) to see error output.
-- If the crash persists, build the debug console version (`python build.py --console`) and run `dist/WikiDataBatchUploader_debug.exe` from a command prompt to view error messages.
+- If the crash persists, build the debug console version (`python build.py --console`) and run the resulting debug executable from a terminal to view error messages.
 
 **Login fails**
 - Verify you are using the bot username and bot password, not your regular credentials.
@@ -278,7 +304,7 @@ If the main application crashes on startup, a `crash_log.txt` is also written to
 - Check that the property IDs and QIDs exist on Wikidata.
 
 **Reference tables are not found / not editable**
-- In the packaged app, the tables are under `%APPDATA%\WikidataBatchUploader\reference_tables`. They are created automatically on first run. If you delete them, they are recreated with defaults.
+- In the packaged app, the tables are under the platform-specific data directory (e.g., `%APPDATA%\WikidataBatchUploader\reference_tables` on Windows). They are created automatically on first run. If you delete them, they are recreated with defaults.
 - You can edit them in-app via **File > Edit Reference Tables...** or by opening the Excel files directly.
 
 **Large datasets appear slow**
@@ -291,7 +317,7 @@ If the main application crashes on startup, a `crash_log.txt` is also written to
 
 ### Build-time missing module / file errors
 
-When building the Windows executable with PyInstaller, you may encounter one of the following errors:
+When building the application with PyInstaller, you may encounter one of the following errors:
 
 - **SystemError: `<class 'ImportError'>` returned a result with an exception set** — caused by a mismatch between `chardet` and PyInstaller. This is resolved by pinning `chardet==4.0.0` in `requirements-lock.txt`.
 - **ModuleNotFoundError: No module named 'pkg_resources'** — `pkg_resources` is part of `setuptools`. This is resolved by pinning `setuptools` and including the `pkg_resources` and `setuptools` hidden imports in `build.py`.
