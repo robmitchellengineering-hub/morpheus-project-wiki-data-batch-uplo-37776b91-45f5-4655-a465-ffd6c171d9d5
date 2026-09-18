@@ -1,6 +1,6 @@
 """Upload local files to Wikimedia Commons using OAuth 1.0a.
 
-This module provides a single entry point, :func:`upload_file_to_commons`,
+This module provides a single entry point, :func:`upload_file`,
 which handles CSRF token retrieval, direct upload for files up to 5 MB,
 and chunked (stashed) upload for larger files. Credentials are loaded
 from core.credential_storage (or passed explicitly) and are used to
@@ -129,15 +129,20 @@ def _handle_api_response(response):
 
 
 def _build_wikitext(text=None, category=None, license_template=None):
-    """Build wikitext for the file description page."""
+    """Build wikitext for the file description page.
+
+    category may be a single category name or a comma-separated list;
+    each is turned into a [[Category:...]] entry.
+    """
     parts = []
     if text:
         parts.append(text)
     if category:
-        # Ensure category is in [[Category:...]] form
-        if not category.startswith("Category:"):
-            category = f"Category:{category}"
-        parts.append(f"[[{category}]]")
+        categories = [c.strip() for c in category.split(',') if c.strip()]
+        for cat in categories:
+            if not cat.startswith("Category:"):
+                cat = f"Category:{cat}"
+            parts.append(f"[[{cat}]]")
     if license_template:
         parts.append(license_template)
     return "\n".join(parts) if parts else None
@@ -282,7 +287,7 @@ def upload_file_to_commons(
             local basename.
         text: Additional wikitext to include on the file description page.
         comment: Edit summary/comment for the upload.
-        category: Category name (without "Category:" prefix is fine).
+        category: Category name (without "Category:" prefix is fine) or comma-separated list.
         license_template: License template (e.g. "{{CC-BY-SA-4.0}}").
         credentials: Optional OAuth 1.0a credentials as a dict or object
             with attributes consumer_key, consumer_secret, access_token,
@@ -360,3 +365,102 @@ def upload_file_to_commons(
                     csrf_token = _get_csrf_token(session)
                     continue
             raise
+
+
+def upload_file(local_path, metadata, edit_summary=None, credentials=None,
+                maxlag=5, max_retries=3):
+    """Upload a single file to Wikimedia Commons using a metadata dict.
+
+    This is the compatibility wrapper used by core.workers.CommonsUploadWorker.
+    It maps the metadata dict keys (filename, description, category/categories,
+    license/license_template) to the arguments expected by
+    :func:`upload_file_to_commons`.
+
+    Args:
+        local_path: Path to the local file.
+        metadata: dict containing key/value pairs for the upload.
+            Recognized keys:
+                - 'filename' or 'destination_filename': destination name.
+                - 'description': wikitext description for the file page.
+                - 'category' or 'categories': a single category or comma-separated list.
+                - 'license' or 'license_template': license template wikitext.
+        edit_summary: Edit summary/comment for the upload.
+        credentials: Optional OAuth credentials (passed to upload_file_to_commons).
+        maxlag: Maxlag value in seconds.
+        max_retries: Number of retries on maxlag/503 errors.
+
+    Returns:
+        dict with keys 'filename', 'url', 'success' (from upload_file_to_commons).
+
+    Raises:
+        CommonsUploadError on failure.
+    """
+    filename = metadata.get('filename') or metadata.get('destination_filename')
+    description = metadata.get('description') or metadata.get('text')
+    category = metadata.get('category') or metadata.get('categories')
+    license_template = metadata.get('license') or metadata.get('license_template')
+
+    return upload_file_to_commons(
+        local_path,
+        filename=filename,
+        text=description,
+        comment=edit_summary,
+        category=category,
+        license_template=license_template,
+        credentials=credentials,
+        maxlag=maxlag,
+        max_retries=max_retries,
+    )
+
+
+def validate_upload_batch(file_paths, metadata_list, credentials=None):
+    """Perform a local pre-flight validation for a Commons batch upload.
+
+    Checks every file and its metadata without making any network calls.
+    Returns a tuple (errors, warnings) where each is a list of strings.
+    """
+    errors = []
+    warnings = []
+
+    if not file_paths:
+        errors.append("No files provided for upload.")
+        return errors, warnings
+
+    # Check credentials availability (without contacting Wikimedia)
+    try:
+        _load_credentials(credentials)
+    except CommonsUploadError as exc:
+        errors.append(str(exc))
+
+    if len(file_paths) != len(metadata_list):
+        errors.append("Number of files does not match number of metadata entries.")
+        return errors, warnings
+
+    allowed_extensions = {'.jpg', '.jpeg', '.png', '.tif', '.tiff'}
+    for i, (file_path, metadata) in enumerate(zip(file_paths, metadata_list)):
+        prefix = f"File {i+1} ({os.path.basename(file_path)}):"
+        if not os.path.isfile(file_path):
+            errors.append(f"{prefix} file does not exist.")
+            continue
+        if os.path.getsize(file_path) == 0:
+            errors.append(f"{prefix} file is empty.")
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext not in allowed_extensions:
+            warnings.append(f"{prefix} file extension '{ext}' is not in the allowed set ({', '.join(sorted(allowed_extensions))}).")
+        # Metadata checks (accept alternate keys from worker/dialog)
+        filename = metadata.get('filename') or metadata.get('destination_filename') or os.path.basename(file_path)
+        if not filename.strip():
+            errors.append(f"{prefix} destination filename is empty.")
+        description = metadata.get('description', '')
+        if not description.strip():
+            errors.append(f"{prefix} description is empty.")
+        license_template = metadata.get('license', metadata.get('license_template', ''))
+        if not license_template.strip():
+            errors.append(f"{prefix} license template is empty.")
+        elif not (license_template.startswith('{{') and license_template.endswith('}}')):
+            warnings.append(f"{prefix} license template '{license_template}' does not look like a wikitext template (should be wrapped in {{...}}).")
+        category = metadata.get('category', metadata.get('categories', ''))
+        if not category.strip():
+            errors.append(f"{prefix} category is empty.")
+
+    return errors, warnings
