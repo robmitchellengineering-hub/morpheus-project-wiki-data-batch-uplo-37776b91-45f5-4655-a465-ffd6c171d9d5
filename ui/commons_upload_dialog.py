@@ -10,6 +10,7 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from ui.image_preview import ImagePreviewWidget
 from core.metadata_extractor import extract_image_metadata
 from core.settings import get_commons_default_category, get_commons_license_template
+from core.commons_uploader import validate_upload_batch
 
 
 class CommonsUploadDialog(QDialog):
@@ -40,12 +41,14 @@ class CommonsUploadDialog(QDialog):
         self.clear_btn = QPushButton('Clear')
         self.mapping_btn = QPushButton('Mapping...')
         self.extract_btn = QPushButton('Extract Metadata')
+        self.validate_btn = QPushButton('Validate (Dry Run)')
         top_layout.addWidget(self.add_files_btn)
         top_layout.addWidget(self.remove_btn)
         top_layout.addWidget(self.clear_btn)
         top_layout.addStretch()
         top_layout.addWidget(self.mapping_btn)
         top_layout.addWidget(self.extract_btn)
+        top_layout.addWidget(self.validate_btn)
         main_layout.addLayout(top_layout)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -100,6 +103,7 @@ class CommonsUploadDialog(QDialog):
         self.clear_btn.clicked.connect(self._clear_files)
         self.mapping_btn.clicked.connect(self._toggle_mapping)
         self.extract_btn.clicked.connect(self._extract_current)
+        self.validate_btn.clicked.connect(self._run_validation)
 
         self.filename_edit.editingFinished.connect(self._on_filename_edited)
         self.description_edit.textChanged.connect(self._on_description_edited)
@@ -295,6 +299,36 @@ class CommonsUploadDialog(QDialog):
         # Fallback: take first token
         first = value.split(' ')[0]
         return first if first else None
+
+    def _run_validation(self):
+        """Run a local validation on the current upload queue without network access."""
+        queue = self.get_upload_queue()
+        if not queue:
+            QMessageBox.warning(self, 'No Files', 'Add at least one file to validate.')
+            return
+
+        file_paths = [item[0] for item in queue]
+        metadata_list = []
+        for path, meta in queue:
+            meta_copy = dict(meta)
+            if not meta_copy.get('categories'):
+                meta_copy['categories'] = get_commons_default_category()
+            if not meta_copy.get('license'):
+                meta_copy['license'] = get_commons_license_template()
+            metadata_list.append(meta_copy)
+
+        errors, warnings = validate_upload_batch(file_paths, metadata_list)
+
+        if not errors and not warnings:
+            QMessageBox.information(self, 'Validation', 'All checks passed.')
+        elif errors:
+            msg = 'Errors found:\n' + '\n'.join(errors)
+            if warnings:
+                msg += '\n\nWarnings:\n' + '\n'.join(warnings)
+            QMessageBox.warning(self, 'Validation Issues', msg)
+        else:
+            msg = 'Validation passed with warnings:\n' + '\n'.join(warnings)
+            QMessageBox.information(self, 'Validation Passed (with warnings)', msg)
 
     def get_upload_queue(self):
         """Return the current upload queue as a list of (file_path, metadata_dict)."""
