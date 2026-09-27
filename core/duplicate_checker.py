@@ -59,8 +59,16 @@ def find_duplicate_rows_within_batch(df: pd.DataFrame, mapping: Dict[str, Option
     clean_df = complete_df[mapped_cols].astype(str).apply(lambda col: col.str.strip())
     hash_series = pd.util.hash_pandas_object(clean_df, index=False)
 
-    groups = complete_df.index.groupby(hash_series).apply(list).to_dict()
-    duplicate_groups = [indices for key, indices in groups.items() if len(indices) > 1]
+    # Group the original index labels by their row hash. `Index.groupby(...)`
+    # returns a dict-like in pandas 2.x, so the old `.apply(list)` raised
+    # `AttributeError: 'PrettyDict' object has no attribute 'apply'` and duplicate
+    # checking was silently dead on the pinned pandas. Grouping the hash Series by
+    # itself gives the same {hash: index labels} mapping and works on both.
+    duplicate_groups = [
+        list(indices)
+        for indices in hash_series.groupby(hash_series).groups.values()
+        if len(indices) > 1
+    ]
     return duplicate_groups
 
 

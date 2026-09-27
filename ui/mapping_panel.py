@@ -245,14 +245,17 @@ class MappingPanel(QtWidgets.QWidget):
 
         morpheus_token = credential_storage.load_morpheus_token()
         if morpheus_token:
-            mappings = suggest_mappings_with_morpheus(columns, samples, morpheus_token)
-            if mappings:
-                self._apply_ai_mappings(mappings, "Morpheus")
+            suggestion = suggest_mappings_with_morpheus(columns, samples, morpheus_token)
+            if suggestion.mappings:
+                self._apply_ai_mappings(suggestion.mappings, "Morpheus")
             else:
+                # Name the reason when there is one: a 500 from the server and a
+                # genuinely empty answer are different problems for the operator.
+                reason = suggestion.error or "Morpheus returned no suggestions for these columns."
                 QtWidgets.QMessageBox.information(
                     self,
                     "AI Mapping",
-                    "Morpheus did not return suggestions. Falling back to local suggestion."
+                    f"{reason}\n\nFalling back to local suggestion."
                 )
                 self._suggest_mappings()
             return

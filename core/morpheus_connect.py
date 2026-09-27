@@ -8,12 +8,16 @@ Three small calls against the real, live Morpheus API:
     it yet (one HTTP call; the caller is responsible for the wait/repeat
     loop — see ui/connect_dialog.py's MorpheusConnectWorker).
   - suggest_mappings_with_morpheus(columns, samples, token): the actual
-    billed AI call, once connected. Drop-in replacement for the old
-    core/gemini_adapter.suggest_mappings_with_gemini — same return shape
-    (a list of {"column", "label"} dicts, or [] on any failure, never
-    raises), just backed by the operator's own Morpheus account instead of
-    a hardcoded Gemini key.
+    billed AI call, once connected, backed by the operator's own Morpheus
+    account instead of a hardcoded Gemini key.
+
+It still never raises — the caller always falls back to local suggestion — but
+it no longer hides why: it returns a MappingSuggestion carrying the failure
+reason, because "no suggestions" and "the server returned 500" used to reach the
+operator as the same sentence.
 """
+from typing import List, NamedTuple, Optional
+
 import requests
 
 # The API lives on its own subdomain, separate from the main site
@@ -75,7 +79,19 @@ def poll_device_flow(device_code):
     return data
 
 
-def suggest_mappings_with_morpheus(columns, samples, token):
+class MappingSuggestion(NamedTuple):
+    """What the AI mapping call produced: suggestions, and why it produced none.
+
+    `error` is None on success (including a legitimate empty answer) and a
+    human-readable reason otherwise — the HTTP status and body, or the exception
+    text for a timeout or a connection failure.
+    """
+
+    mappings: List[dict]
+    error: Optional[str] = None
+
+
+def suggest_mappings_with_morpheus(columns, samples, token) -> MappingSuggestion:
     """Ask Morpheus (runAiAction, task=schema_mapping) to suggest a
     Wikidata property label for each column, using the operator's own
     connected Morpheus account.
@@ -89,12 +105,13 @@ def suggest_mappings_with_morpheus(columns, samples, token):
             login (core.credential_storage.load_morpheus_token()).
 
     Returns:
-        List of {"column", "label"} dicts on success. Empty list on any
-        failure (not connected, network error, malformed response) — never
-        raises, so a caller can always safely fall back to local suggestion.
+        MappingSuggestion(mappings=[...]) on success and
+        MappingSuggestion(mappings=[], error="...") on any failure — never raises,
+        so a caller can always fall back to local suggestion while still being able
+        to tell the operator what went wrong.
     """
     if not token:
-        return []
+        return MappingSuggestion([], "Not connected to Morpheus — connect first, then ask it to map the columns.")
     try:
         resp = requests.post(
             f"{MORPHEUS_API_BASE_URL}/api/functions/runAiAction",
@@ -104,14 +121,26 @@ def suggest_mappings_with_morpheus(columns, samples, token):
         )
         resp.raise_for_status()
         data = resp.json()
-    except Exception:
-        return []
+    except requests.HTTPError as exc:
+        # The status and the body are the whole point: this used to be one of
+        # three indistinguishable `return []` paths, so an operator saw
+        # "did not return suggestions" for a 500, a 401 and a timeout alike.
+        status = getattr(getattr(exc, 'response', None), 'status_code', None)
+        body = ''
+        try:
+            body = (exc.response.text or '').strip()[:300]
+        except Exception:
+            body = ''
+        detail = f"HTTP {status}" if status else str(exc)
+        return MappingSuggestion([], f"Morpheus rejected the mapping request ({detail})." + (f" {body}" if body else ""))
+    except Exception as exc:
+        return MappingSuggestion([], f"Could not reach Morpheus: {type(exc).__name__}: {exc}")
 
     mappings = data.get("mappings", [])
     if not isinstance(mappings, list):
-        return []
-    return [
+        return MappingSuggestion([], "Morpheus returned an unexpected response shape for the mapping request.")
+    return MappingSuggestion([
         {"column": str(m["column"]), "label": str(m["label"])}
         for m in mappings
         if isinstance(m, dict) and m.get("column") and m.get("label")
-    ]
+    ])

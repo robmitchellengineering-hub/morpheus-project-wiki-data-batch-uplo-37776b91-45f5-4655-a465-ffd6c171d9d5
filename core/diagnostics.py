@@ -84,7 +84,11 @@ def _get_package_versions() -> dict:
 
 def _run_import_tests() -> dict:
     """Attempt to import every core and ui module, recording results."""
+    # Kept exhaustive on purpose: this list skipped core.commons_uploader and
+    # ui.commons_upload_dialog — the two largest modules in the app — so the
+    # self-test reported a clean sweep while importing neither of them.
     modules = [
+        'core.commons_uploader',
         'core.credential_storage',
         'core.data_loader',
         'core.duplicate_checker',
@@ -99,6 +103,7 @@ def _run_import_tests() -> dict:
         'core.validator',
         'core.workers',
         'ui.auth_dialog',
+        'ui.commons_upload_dialog',
         'ui.connect_dialog',
         'ui.image_preview',
         'ui.main_window',
