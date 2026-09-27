@@ -1,13 +1,19 @@
 import pandas as pd
 from pathlib import Path
 
+# `datatype` is the property's Wikidata datatype, and it decides which statement
+# class a value must become: a time or a quantity written as a string is rejected
+# by Wikidata (that is how P571 inception and P1082 population failed). It is a
+# column in the reference table rather than a hardcoded map, so an operator can
+# add a property and its type without a code change. A table without the column
+# still loads — the datatype is then inferred from the value, as before.
 DEFAULT_PROPERTIES = [
-    {"property_id": "P571", "label": "inception"},
-    {"property_id": "P17", "label": "country"},
-    {"property_id": "P131", "label": "located in the administrative territorial entity"},
-    {"property_id": "P625", "label": "coordinate location"},
-    {"property_id": "P18", "label": "image"},
-    {"property_id": "P31", "label": "instance of"},
+    {"property_id": "P571", "label": "inception", "datatype": "time"},
+    {"property_id": "P17", "label": "country", "datatype": "wikibase-item"},
+    {"property_id": "P131", "label": "located in the administrative territorial entity", "datatype": "wikibase-item"},
+    {"property_id": "P625", "label": "coordinate location", "datatype": "globe-coordinate"},
+    {"property_id": "P18", "label": "image", "datatype": "commonsMedia"},
+    {"property_id": "P31", "label": "instance of", "datatype": "wikibase-item"},
 ]
 
 DEFAULT_CONSTANTS = [
@@ -29,6 +35,24 @@ def ensure_sample_reference_tables(ref_dir):
     if not const_path.exists():
         df_const = pd.DataFrame(DEFAULT_CONSTANTS)
         df_const.to_excel(const_path, index=False)
+
+
+def datatype_map(properties_df) -> dict:
+    """Return {property_id: datatype} from the reference table.
+
+    Empty when the table predates the `datatype` column, or the column is blank —
+    callers then fall back to inferring the type from the value, which is the
+    behaviour before the column existed.
+    """
+    if properties_df is None or 'datatype' not in getattr(properties_df, 'columns', []):
+        return {}
+    out = {}
+    for _, row in properties_df.iterrows():
+        prop = str(row.get('property_id', '') or '').strip()
+        dtype = str(row.get('datatype', '') or '').strip()
+        if prop and dtype and dtype.lower() != 'nan':
+            out[prop] = dtype
+    return out
 
 
 def load_wikidata_properties(ref_dir):

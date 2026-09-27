@@ -1,3 +1,4 @@
+import re
 import time
 import pandas as pd
 from wikidataintegrator import wdi_core, wdi_login
@@ -5,6 +6,7 @@ from typing import Dict, List, Any, Optional, Union, Callable
 
 from core.validator import validate_dataset
 from core.duplicate_checker import find_duplicate_rows_within_batch
+from core.reference_tables import datatype_map
 
 
 def validate_login(username: str, password: str) -> Optional[wdi_login.WDLogin]:
@@ -63,14 +65,83 @@ def _parse_coordinate(value_str: str) -> Optional[tuple]:
     return lat, lon
 
 
-def _value_to_statement(property_id: str, value: Any) -> Union[wdi_core.WDItemID, wdi_core.WDUrl, wdi_core.WDString, wdi_core.WDGlobeCoordinate, None]:
-    """Convert a single value into a Wikidata statement object."""
+def _parse_time_value(value_str: str) -> Optional[tuple]:
+    """Return (Wikidata time string, precision) for a date-like value, or None.
+
+    Wikidata wants '+1900-01-01T00:00:00Z' plus a precision (9 = year, 10 = month,
+    11 = day). A bare '1900' is accepted by the statement class and then written
+    verbatim, which Wikidata rejects — so the shape is built here rather than
+    trusted. Excel hands years over as floats ('1900.0'), which the trailing-zero
+    strip below handles.
+    """
+    s = value_str.strip()
+    if re.match(r'^[+-]\d{4,}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$', s):
+        return s, 11
+    s = re.sub(r'\.0+$', '', s)
+    m = re.match(r'^(-?\d{1,4})(?:-(\d{1,2}))?(?:-(\d{1,2}))?$', s)
+    if not m:
+        return None
+    year = int(m.group(1))
+    month = int(m.group(2)) if m.group(2) else 1
+    day = int(m.group(3)) if m.group(3) else 1
+    sign = '+' if year >= 0 else '-'
+    time_value = f"{sign}{abs(year):04d}-{month:02d}-{day:02d}T00:00:00Z"
+    precision = 11 if m.group(3) else (10 if m.group(2) else 9)
+    return time_value, precision
+
+
+def _clean_numeric(value_str: str) -> str:
+    """'1,234.0' -> '1234', so an Excel float does not become '+1234.0'."""
+    s = value_str.strip().replace(',', '').replace(' ', '')
+    s = re.sub(r'\.0+$', '', s)
+    return s
+
+
+def _value_to_statement(property_id: str, value: Any, datatype: Optional[str] = None) -> Optional[Any]:
+    """Convert a single value into a Wikidata statement object.
+
+    `datatype` is the property's Wikidata datatype from the reference table, and it
+    decides the statement class. Without it the type is inferred from the value,
+    which handles items, URLs and coordinates but cannot tell a time from a string
+    — that is how P571 inception and P1082 population were uploaded as strings and
+    rejected. Every inference below is left in place for tables that predate the
+    datatype column.
+    """
     if pd.isna(value) or value == '':
         return None
 
     value_str = str(value).strip()
     if not value_str:
         return None
+
+    if datatype:
+        dt = str(datatype).strip().lower()
+        if dt in ('time', 'date', 'datetime'):
+            parsed = _parse_time_value(value_str)
+            if parsed is not None:
+                time_value, precision = parsed
+                return wdi_core.WDTime(time_value, prop_nr=property_id, precision=precision)
+        elif dt in ('quantity', 'number'):
+            cleaned = _clean_numeric(value_str)
+            if re.match(r'^[+-]?\d+(\.\d+)?$', cleaned):
+                return wdi_core.WDQuantity(cleaned, prop_nr=property_id)
+        elif dt == 'commonsmedia':
+            return wdi_core.WDCommonsMedia(value=value_str, prop_nr=property_id)
+        elif dt == 'monolingualtext':
+            return wdi_core.WDMonolingualText(value=value_str, prop_nr=property_id)
+        elif dt == 'external-id':
+            return wdi_core.WDExternalID(value=value_str, prop_nr=property_id)
+        elif dt == 'globe-coordinate':
+            coord = _parse_coordinate(value_str)
+            if coord is not None:
+                lat, lon = coord
+                return wdi_core.WDGlobeCoordinate(lat, lon, COORDINATE_PRECISION_DEGREES, prop_nr=property_id)
+        elif dt == 'url':
+            return wdi_core.WDUrl(value=value_str, prop_nr=property_id)
+        elif dt == 'string':
+            return wdi_core.WDString(value=value_str, prop_nr=property_id)
+        # 'wikibase-item' and anything unrecognised fall through to the inference
+        # below, which refuses a value that is not a QID rather than inventing one.
 
     # Globe coordinate ("coordinate location") -- must be built as
     # WDGlobeCoordinate, not a plain string, or Wikidata rejects/mishandles
@@ -112,7 +183,8 @@ def build_constants_statements(constants_df: pd.DataFrame) -> List[wdi_core.WDIt
 
 
 def build_statements(row: pd.Series, mapping: Dict[str, Optional[str]], constants_df: pd.DataFrame,
-                     constant_statements: Optional[List[wdi_core.WDItemID]] = None) -> List[Any]:
+                     constant_statements: Optional[List[wdi_core.WDItemID]] = None,
+                     datatypes: Optional[Dict[str, str]] = None) -> List[Any]:
     """Build a list of Wikidata statements for a given data row and mapping.
 
     Args:
@@ -134,7 +206,7 @@ def build_statements(row: pd.Series, mapping: Dict[str, Optional[str]], constant
         if col not in row.index:
             continue
         value = row[col]
-        stmt = _value_to_statement(property_id, value)
+        stmt = _value_to_statement(property_id, value, datatypes.get(property_id) if datatypes else None)
         if stmt is not None:
             statements.append(stmt)
 
@@ -148,7 +220,8 @@ def build_statements(row: pd.Series, mapping: Dict[str, Optional[str]], constant
 
 def upload_row(login: wdi_login.WDLogin, row: pd.Series, mapping: Dict[str, Optional[str]], constants_df: pd.DataFrame,
                edit_summary: str, maxlag: float = 5.0,
-               constant_statements: Optional[List[wdi_core.WDItemID]] = None) -> str:
+               constant_statements: Optional[List[wdi_core.WDItemID]] = None,
+               datatypes: Optional[Dict[str, str]] = None) -> str:
     """Create a new Wikidata item from a row and return the item ID.
 
     Handles Wikidata maxlag by setting wdi_core.config['MAXLAG'] before each write
@@ -164,7 +237,7 @@ def upload_row(login: wdi_login.WDLogin, row: pd.Series, mapping: Dict[str, Opti
         maxlag: Maximum server lag allowed in seconds.
         constant_statements: Optional prebuilt project constant statements.
     """
-    statements = build_statements(row, mapping, constants_df, constant_statements)
+    statements = build_statements(row, mapping, constants_df, constant_statements, datatypes)
     if not statements:
         raise ValueError("No statements to upload for this row.")
 
@@ -196,7 +269,8 @@ def upload_rows(
     callback: Optional[Callable[[int, int, str], None]] = None,
     delay_seconds: float = 1.0,
     maxlag: float = 5.0,
-    skip_rows: Optional[set] = None
+    skip_rows: Optional[set] = None,
+    datatypes: Optional[Dict[str, str]] = None
 ) -> int:
     """Upload all rows in df to Wikidata, respecting a configurable delay.
 
@@ -236,7 +310,8 @@ def upload_rows(
         item_id = upload_row(
             login, row, mapping, constants_df, edit_summary,
             maxlag=maxlag,
-            constant_statements=constant_statements
+            constant_statements=constant_statements,
+            datatypes=datatypes
         )
         uploaded_count += 1
         if callback is not None:
@@ -266,9 +341,13 @@ def dry_run(df: pd.DataFrame, mapping: Dict[str, Optional[str]], constants_df: p
 
     # Precompute project constant statements for efficiency.
     constant_statements = build_constants_statements(constants_df)
+    # The dry run already receives the reference table, so it can honour the
+    # declared datatypes — a dry run that disagrees with the upload is worse than
+    # no dry run.
+    datatypes = datatype_map(properties_df) if properties_df is not None else {}
 
     for idx, row in df.iterrows():
-        statements = build_statements(row, mapping, constants_df, constant_statements)
+        statements = build_statements(row, mapping, constants_df, constant_statements, datatypes)
         total_statements += len(statements)
 
         row_has_missing = False

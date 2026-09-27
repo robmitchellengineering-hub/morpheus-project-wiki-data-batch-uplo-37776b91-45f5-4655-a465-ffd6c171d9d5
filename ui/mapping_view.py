@@ -1,5 +1,5 @@
 from PyQt6 import QtCore, QtWidgets
-from core.reference_tables import ensure_sample_reference_tables, load_wikidata_properties, load_project_constants
+from core.reference_tables import ensure_sample_reference_tables, load_wikidata_properties, load_project_constants, datatype_map
 from ui.preview_table import PreviewTableWidget
 from ui.mapping_panel import MappingPanel
 from ui.auth_dialog import AuthDialog
@@ -17,12 +17,13 @@ class UploadWorker(QtCore.QThread):
     error = QtCore.pyqtSignal(str)
     finished = QtCore.pyqtSignal(int)  # number of rows uploaded
 
-    def __init__(self, login, df, mapping, constants_df, edit_summary, delay_seconds, maxlag, skip_rows=None, parent=None):
+    def __init__(self, login, df, mapping, constants_df, edit_summary, delay_seconds, maxlag, skip_rows=None, parent=None, datatypes=None):
         super().__init__(parent)
         self.login = login
         self.df = df
         self.mapping = mapping
         self.constants_df = constants_df
+        self.datatypes = datatypes or {}
         self.edit_summary = edit_summary
         self.delay_seconds = delay_seconds
         self.maxlag = maxlag
@@ -40,7 +41,8 @@ class UploadWorker(QtCore.QThread):
                 callback=self._on_progress,
                 delay_seconds=self.delay_seconds,
                 maxlag=self.maxlag,
-                skip_rows=self.skip_rows
+                skip_rows=self.skip_rows,
+                datatypes=self.datatypes
             )
             self.finished.emit(len(self.df) - len(self.skip_rows))
         except Exception as e:
@@ -346,7 +348,8 @@ class MappingView(QtWidgets.QWidget):
             delay_seconds,
             maxlag_seconds,
             skip_rows=skip_rows,
-            parent=self
+            parent=self,
+            datatypes=datatype_map(self.properties_df)
         )
         self._upload_thread.progress.connect(self._on_upload_progress)
         self._upload_thread.error.connect(self._on_upload_error)

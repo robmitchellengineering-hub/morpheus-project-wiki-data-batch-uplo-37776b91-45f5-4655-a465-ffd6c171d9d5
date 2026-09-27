@@ -17,6 +17,12 @@ jobs:
           python-version: '3.11'
       - name: Install dependencies
         run: pip install -r requirements-lock.txt
+      # Before the build, not after: a duplicate checker that raises on the pinned
+      # pandas produced a clean build and a broken app once already. These are the
+      # tests for the faults that shipped.
+      - name: Run behaviour tests
+        shell: bash
+        run: python -m unittest discover -s tests -v
       - name: Build with the project's own build script
         shell: bash
         run: |
