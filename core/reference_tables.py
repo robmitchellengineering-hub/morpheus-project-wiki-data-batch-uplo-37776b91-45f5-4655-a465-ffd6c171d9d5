@@ -55,6 +55,32 @@ def datatype_map(properties_df) -> dict:
     return out
 
 
+def _with_default_datatypes(df, props_path):
+    """Add a `datatype` column to a table written by a build that had none.
+
+    Loading is the right place for this: an existing install already has
+    wikidata_properties.xlsx, and ensure_sample_reference_tables only writes when
+    the file is absent — so without this, upgrading would keep reading the old
+    table and every value would still go out as a string, which is the fault this
+    column exists to fix. Known properties take the default datatype; anything else
+    is left blank, which keeps the old value-based inference for it. The file is
+    rewritten on a best-effort basis: a read-only directory must not stop the app
+    from loading.
+    """
+    if 'datatype' not in df.columns:
+        defaults = {row['property_id']: row.get('datatype', '') for row in DEFAULT_PROPERTIES}
+        if 'property_id' in df.columns:
+            df = df.copy()
+            df['datatype'] = [defaults.get(str(pid), '') for pid in df['property_id']]
+        else:
+            return df
+    try:
+        df.to_excel(props_path, index=False)
+    except Exception:
+        pass
+    return df
+
+
 def load_wikidata_properties(ref_dir):
     """Load wikidata_properties.xlsx as a DataFrame with required columns."""
     ref_dir = Path(ref_dir)
@@ -66,7 +92,9 @@ def load_wikidata_properties(ref_dir):
     for col in required:
         if col not in df.columns:
             raise ValueError(f"wikidata_properties.xlsx must contain column '{col}'")
-    return df
+    # An older table gains the datatype column here, and only here — that is the
+    # upgrade path for an install that already exists.
+    return _with_default_datatypes(df, props_path)
 
 
 def load_project_constants(ref_dir):
