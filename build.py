@@ -35,8 +35,20 @@ EXCLUDE_MODULES = [
 
 def smoke_test(executable_path):
     print('Running smoke test: launching executable...')
+    # A CI runner has no display: Qt aborts on startup there, which made this test
+    # fail on Linux and macOS for reasons that had nothing to do with the app (the
+    # macOS job exited 255 before the window server was ever reached). Asking Qt for
+    # its offscreen platform still exercises the bundle — Qt loads, QApplication is
+    # built, the main window is constructed — which is what this test is for. A
+    # machine with a real display keeps testing a real window.
+    env = dict(os.environ)
+    headless = (sys.platform.startswith('linux') and not env.get('DISPLAY')) or (
+        sys.platform == 'darwin' and env.get('CI'))
+    if headless:
+        env['QT_QPA_PLATFORM'] = 'offscreen'
+        print('No display here; running the smoke test with QT_QPA_PLATFORM=offscreen.')
     try:
-        proc = subprocess.Popen([executable_path])
+        proc = subprocess.Popen([executable_path], env=env)
     except Exception as e:
         print(f'Failed to launch executable: {e}')
         sys.exit(1)
