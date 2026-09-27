@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core import diagnostics  # noqa: E402
 from core import morpheus_connect  # noqa: E402
 from core.duplicate_checker import find_duplicate_rows_within_batch  # noqa: E402
-from core.reference_tables import DEFAULT_PROPERTIES, datatype_map  # noqa: E402
+from core.reference_tables import DEFAULT_PROPERTIES, datatype_map, load_wikidata_properties  # noqa: E402
 from core.uploader import _parse_time_value, _value_to_statement  # noqa: E402
 from wikidataintegrator import wdi_core  # noqa: E402
 
@@ -149,6 +149,45 @@ class ReferenceTableTest(unittest.TestCase):
             {'property_id': '', 'datatype': 'string'},
         ])
         self.assertEqual(datatype_map(df), {'P571': 'time'})
+
+
+class ReferenceTableUpgradeTest(unittest.TestCase):
+    """An install that already exists has a table with no datatype column.
+
+    The seeder only writes when the file is absent, so without an upgrade path the
+    datatype fix would never reach a machine that has already run the app.
+    """
+
+    def setUp(self):
+        import tempfile
+        self.dir = tempfile.mkdtemp()
+        self.path = os.path.join(self.dir, 'wikidata_properties.xlsx')
+        # exactly what a build before this change wrote
+        pd.DataFrame([
+            {'property_id': 'P571', 'label': 'inception'},
+            {'property_id': 'P999', 'label': 'a property only this operator knows'},
+        ]).to_excel(self.path, index=False)
+
+    def test_the_column_is_added_on_load(self):
+        df = load_wikidata_properties(self.dir)
+        self.assertIn('datatype', df.columns)
+        self.assertEqual(datatype_map(df)['P571'], 'time')
+
+    def test_a_property_we_do_not_know_is_left_blank_not_guessed(self):
+        df = load_wikidata_properties(self.dir)
+        self.assertNotIn('P999', datatype_map(df))
+
+    def test_the_upgrade_is_written_back_so_it_happens_once(self):
+        load_wikidata_properties(self.dir)
+        on_disk = pd.read_excel(self.path, engine='openpyxl')
+        self.assertIn('datatype', on_disk.columns)
+
+    def test_an_existing_custom_datatype_is_never_overwritten(self):
+        pd.DataFrame([
+            {'property_id': 'P571', 'label': 'inception', 'datatype': 'string'},
+        ]).to_excel(self.path, index=False)
+        df = load_wikidata_properties(self.dir)
+        self.assertEqual(datatype_map(df)['P571'], 'string')
 
 
 class _FakeResponse:
