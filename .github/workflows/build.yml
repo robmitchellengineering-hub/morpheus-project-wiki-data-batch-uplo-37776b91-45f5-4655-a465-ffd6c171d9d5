@@ -17,8 +17,9 @@ jobs:
         # failure is `Bad CPU type in executable`, with nothing in the build log to explain it. An Intel
         # (x86_64) build runs natively on Intel and on Apple Silicon through Rosetta. So both are built
         # and the operator installs their machine's. Until this change the only macOS artifact was arm64,
-        # which could not be installed on the Intel Mac it was built for.
-        os: [ubuntu-latest, windows-latest, macos-13, macos-14]
+        # which could not be installed on the Intel Mac it was built for. (`macos-13` is the older Intel label
+        # and now sits queued forever — GitHub is retiring it — so the Intel entry is `macos-15-intel`.)
+        os: [ubuntu-latest, windows-latest, macos-15-intel, macos-14]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -57,20 +58,27 @@ jobs:
             exit 1
           }
           Stop-Process -Id $proc.Id -Force
-      # `--diagnose` import-tests every module and prints a summary, but it NEVER exits non-zero — it
-      # writes a report and carries on. So "it ran" is not "it passed", and a bundle with dead imports
-      # would ship green: the step has to READ the summary and fail on it (hazard H17). This is also the
-      # macOS check the build has never had. The windowed .app's bootloader cannot start without a window
-      # session, but the same bundle's payload can still be exercised offscreen.
-      - name: macOS verification (headless)
+      # WHAT CANNOT BE CHECKED HERE, so nobody tries again: the macOS build is WINDOWED, and PyInstaller's
+      # windowed bootloader exits 255 before Python starts when there is no window server. So `--diagnose`,
+      # which import-tests every module and would be the obvious smoke test, cannot run on a headless macOS
+      # runner at all — the first version of this step did exactly that and could never have passed. A
+      # functional macOS check needs a Mac with a desktop; that is a real limit, not an omission.
+      #
+      # WHAT CAN BE CHECKED, and is the thing that actually went wrong: the ARCHITECTURE. The macOS artifact
+      # was arm64-only (built on `macos-latest`, which is Apple Silicon), and an arm64 build cannot run on an
+      # Intel Mac — `Bad CPU type in executable`, with nothing in the build log to explain it. Asserting the
+      # architecture we asked for turns that silent mismatch into a failed build.
+      - name: macOS architecture is the one we asked for
         if: runner.os == 'macOS'
         shell: bash
         run: |
-          set -o pipefail
-          test -x dist/WikiDataBatchUploader
-          echo "verifying $(lipo -archs dist/WikiDataBatchUploader 2>/dev/null || echo 'arch?') on $(uname -m)"
-          QT_QPA_PLATFORM=offscreen ./dist/WikiDataBatchUploader --diagnose 2>&1 | tee diag.txt
-          grep -qE "Import summary: [0-9]+ succeeded, 0 failed\." diag.txt
+          set -euo pipefail
+          archs=$(lipo -archs dist/WikiDataBatchUploader)
+          echo "built: $archs   runner: $(uname -m)   requested: ${{ matrix.os }}"
+          case "${{ matrix.os }}" in
+            *intel*) case "$archs" in *x86_64*) ;; *) echo "::error::asked for Intel, got '$archs'"; exit 1;; esac ;;
+            *)       case "$archs" in *arm64*)  ;; *) echo "::error::asked for Apple Silicon, got '$archs'"; exit 1;; esac ;;
+          esac
 
       - name: Upload dist artifact
         uses: actions/upload-artifact@v4
