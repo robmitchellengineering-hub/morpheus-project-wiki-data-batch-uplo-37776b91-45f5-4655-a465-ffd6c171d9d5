@@ -30,12 +30,12 @@ EXCLUDE_MODULES = [
     'matplotlib', 'scipy', 'IPython', 'tkinter',
     'PyQt6.QtWebEngineWidgets', 'PyQt6.QtPdf', 'PyQt6.QtQml',
     'PyQt6.QtCharts', 'PyQt6.QtDataVisualization',
-    # QtBluetooth is not used anywhere in this app, and bundling it BROKE THE MACOS BUILD AT LAUNCH:
-    # Qt frameworks are symlink-heavy (Resources -> Versions/Current/Resources), the --onefile archive
-    # carries both the symlink and its target, and extraction died with
-    #   "Failed to extract PyQt6/Qt6/lib/QtBluetooth.framework/Resources/Info.plist: File exists"
-    # before Python ever started. The windowed macOS smoke test cannot see this — a headless runner
-    # cannot launch the app at all — so it shipped as "NOT VERIFIED" on both architectures.
+    # Unused, so it does not belong in the bundle. NOTE: this does NOT fix the macOS launch crash
+    # measured 2026-09-30 — "Failed to extract .../QtBluetooth.framework/Resources/Info.plist: File
+    # exists" — because the framework is collected as DATA, not as this module, so the archive still
+    # carries it. The real fix is building macOS with --onedir instead of --onefile. Kept because an
+    # unused module should not be bundled either way, and the comment is here so nobody mistakes it for
+    # the fix the next time the Mac build will not start.
     'PyQt6.QtBluetooth',
 ]
 

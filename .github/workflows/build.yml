@@ -64,6 +64,14 @@ jobs:
       # runner at all — the first version of this step did exactly that and could never have passed. A
       # functional macOS check needs a Mac with a desktop; that is a real limit, not an omission.
       #
+      # AND THE macOS ARTIFACT IS CURRENTLY BROKEN REGARDLESS OF ARCHITECTURE (measured 2026-09-30 on an
+      # Intel Mac): launching it dies during --onefile extraction with
+      #   "Failed to extract PyQt6/Qt6/lib/QtBluetooth.framework/Resources/Info.plist: File exists"
+      # because Qt frameworks are symlink-heavy and the archive carries both the symlink and its target.
+      # Excluding the MODULE does not help — the framework is collected as DATA, which is why
+      # `--exclude-module PyQt6.QtBluetooth` changed nothing. The fix is `--onedir` for macOS. This step
+      # cannot see any of that, which is exactly how it shipped as "NOT VERIFIED" on both architectures.
+      #
       # WHAT CAN BE CHECKED, and is the thing that actually went wrong: the ARCHITECTURE. The macOS artifact
       # was arm64-only (built on `macos-latest`, which is Apple Silicon), and an arm64 build cannot run on an
       # Intel Mac — `Bad CPU type in executable`, with nothing in the build log to explain it. Asserting the
