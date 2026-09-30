@@ -8,7 +8,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # macOS appears TWICE, on purpose, and the reason is one-directional:
+        # `macos-latest` is Apple Silicon (arm64) and an arm64 build CANNOT run on an Intel Mac — the
+        # failure is `Bad CPU type in executable`, with nothing in the build log to explain it. An Intel
+        # (x86_64) build runs natively on Intel and on Apple Silicon through Rosetta. So both are built
+        # and the operator installs their machine's. Until this change the only macOS artifact was arm64,
+        # which could not be installed on the Intel Mac it was built for.
+        os: [ubuntu-latest, windows-latest, macos-13, macos-14]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -47,6 +53,21 @@ jobs:
             exit 1
           }
           Stop-Process -Id $proc.Id -Force
+      # `--diagnose` import-tests every module and prints a summary, but it NEVER exits non-zero — it
+      # writes a report and carries on. So "it ran" is not "it passed", and a bundle with dead imports
+      # would ship green: the step has to READ the summary and fail on it (hazard H17). This is also the
+      # macOS check the build has never had. The windowed .app's bootloader cannot start without a window
+      # session, but the same bundle's payload can still be exercised offscreen.
+      - name: macOS verification (headless)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -o pipefail
+          test -x dist/WikiDataBatchUploader
+          echo "verifying $(lipo -archs dist/WikiDataBatchUploader 2>/dev/null || echo 'arch?') on $(uname -m)"
+          QT_QPA_PLATFORM=offscreen ./dist/WikiDataBatchUploader --diagnose 2>&1 | tee diag.txt
+          grep -qE "Import summary: [0-9]+ succeeded, 0 failed\." diag.txt
+
       - name: Upload dist artifact
         uses: actions/upload-artifact@v4
         with:
