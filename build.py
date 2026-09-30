@@ -95,8 +95,17 @@ def _clean_previous_build():
     return dist_dir, build_dir
 
 
-def _pyinstaller_base_cmd(app_name, dist_dir, build_dir):
-    cmd = [sys.executable, '-m', 'PyInstaller', '--onefile']
+def _pyinstaller_base_cmd(app_name, dist_dir, build_dir, onefile=True):
+    # `onefile=False` gives --onedir, and on macOS that is not a preference. With --onefile, PyInstaller
+    # flattens Qt's symlinked frameworks into duplicate copies inside the archive, and extraction of the
+    # ~120 MB payload dies at launch with:
+    #   Failed to extract PyQt6/Qt6/lib/QtBluetooth.framework/Resources/Info.plist: File exists
+    # before Python ever starts — measured 2026-09-30 on an Intel Mac, reproducibly, after clearing the
+    # _MEI temp dirs, on a build whose smoke test had passed on the runner (the runner never launched the
+    # windowed bundle, so nothing ever caught it). --onedir ships the payload as a directory inside the
+    # .app: nothing is extracted, so the collision cannot happen, and the 120 MB unpack disappears from
+    # every launch as a bonus. Windows and Linux keep --onefile, where both work and the smoke test passes.
+    cmd = [sys.executable, '-m', 'PyInstaller', '--onedir' if not onefile else '--onefile']
     cmd += ['--name', app_name, '--clean', '--noconfirm',
             '--distpath', dist_dir, '--workpath', build_dir, '--specpath', build_dir]
     for pkg, flag in COLLECT_PACKAGES:
@@ -129,9 +138,9 @@ def build_windows(console_mode):
 
     app_name = 'WikiDataBatchUploader_debug' if console_mode else 'WikiDataBatchUploader'
     target_exe_name = app_name + '.exe'
-    cmd = _pyinstaller_base_cmd(app_name, 'dist', 'build')
+    cmd = _pyinstaller_base_cmd(app_name, 'dist', 'build', onefile=False)
     if not console_mode:
-        cmd.insert(3, '--windowed')  # after --onefile
+        cmd.insert(3, '--windowed')  # after --onedir/--onefile
     cmd.append('main.py')
 
     _run_pyinstaller(cmd)
@@ -192,9 +201,9 @@ def build_macos(console_mode):
     _run_pyinstaller(cmd)
 
     if console_mode:
-        # --onefile without --windowed produces a plain executable on
-        # macOS too, not a .app bundle.
-        executable_path = os.path.join(dist_dir, app_name)
+        # --onedir without --windowed produces a plain executable inside a
+        # directory on macOS, not a .app bundle and not a flat file.
+        executable_path = os.path.join(dist_dir, app_name, app_name)
         if not os.path.exists(executable_path) or os.path.getsize(executable_path) == 0:
             print(f'PyInstaller produced no valid executable at expected location: {executable_path}')
             sys.exit(1)
