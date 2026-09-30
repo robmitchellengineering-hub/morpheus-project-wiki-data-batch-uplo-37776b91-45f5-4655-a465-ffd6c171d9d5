@@ -175,6 +175,39 @@ def build_windows(console_mode):
     print('Build complete. Executable is in dist/')
 
 
+
+def _prune_unused_qt_frameworks(names):
+    """Delete Qt frameworks this app never loads, which PyInstaller cannot collect on macOS.
+
+    MEASURED 2026-09-30, and this is the real root cause of the macOS build never working.
+    `QtBluetooth.framework` is collected TWICE — once as data by `--collect-data PyQt6`, once by
+    PyInstaller's own PyQt6 hook — and the two copies disagree about its symlinks, specifically
+    `Resources -> Versions/Current/Resources`. The two failure modes are the same bug:
+
+      * `--onedir` preserves the symlinks and the BUILD dies:
+          FileExistsError: File exists: 'Versions/Current/Resources' -> '.../QtBluetooth.framework/Resources'
+      * `--onefile` dereferences them into duplicate entries and the APP dies at launch:
+          Failed to extract .../QtBluetooth.framework/Resources/Info.plist: File exists
+
+    Either way the macOS artifact has never been runnable, and `--exclude-module PyQt6.QtBluetooth` does
+    not help because the framework arrives as DATA, not as that module. Nothing in this app imports
+    Bluetooth, so the framework is deleted from the package before PyInstaller looks at it.
+    """
+    try:
+        import PyQt6  # noqa: F401  (only needed to locate the Qt tree)
+    except Exception as e:  # pragma: no cover - a missing PyQt6 fails the build properly further on
+        print(f'Could not locate PyQt6 to prune Qt frameworks: {e}')
+        return
+    lib = os.path.join(os.path.dirname(PyQt6.__file__), 'Qt6', 'lib')
+    removed = []
+    for name in names:
+        target = os.path.join(lib, f'{name}.framework')
+        if os.path.isdir(target):
+            shutil.rmtree(target, ignore_errors=True)
+            removed.append(name)
+    print(f'Pruned unused Qt frameworks: {", ".join(removed) if removed else "none were present"}')
+
+
 def build_macos(console_mode):
     # Mirrors build_windows above -- same PyInstaller args/collected
     # packages, since PyQt6/pandas/wikidataintegrator etc. need the same
@@ -199,6 +232,9 @@ def build_macos(console_mode):
         cmd.insert(4, '--osx-bundle-id')
         cmd.insert(5, 'com.valiantmusic.wikidatauploader')
     cmd.append('main.py')
+
+    # QtBluetooth's framework cannot be collected twice; see the helper for the two ways that fails.
+    _prune_unused_qt_frameworks(['QtBluetooth'])
 
     _run_pyinstaller(cmd)
 
