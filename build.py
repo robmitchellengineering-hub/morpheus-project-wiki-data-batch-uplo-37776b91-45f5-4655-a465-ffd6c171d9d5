@@ -208,6 +208,18 @@ def _prune_unused_qt_frameworks(names):
     print(f'Pruned unused Qt frameworks: {", ".join(removed) if removed else "none were present"}')
 
 
+
+def _drop_collect_pair(cmd, flag, pkg):
+    """Remove a `--collect-<flag> <pkg>` pair from a PyInstaller command, if present."""
+    try:
+        i = cmd.index(flag)
+    except ValueError:
+        return cmd
+    if i + 1 < len(cmd) and cmd[i + 1] == pkg:
+        del cmd[i:i + 2]
+    return cmd
+
+
 def build_macos(console_mode):
     # Mirrors build_windows above -- same PyInstaller args/collected
     # packages, since PyQt6/pandas/wikidataintegrator etc. need the same
@@ -233,7 +245,25 @@ def build_macos(console_mode):
         cmd.insert(5, 'com.valiantmusic.wikidatauploader')
     cmd.append('main.py')
 
-    # QtBluetooth's framework cannot be collected twice; see the helper for the two ways that fails.
+    # THE ROOT CAUSE, and it is a double collection rather than any one framework.
+    #
+    # `--collect-data PyQt6` sweeps the whole `Qt6/` tree, `.framework` directories included, while
+    # PyInstaller's own PyQt6 hook collects the same Qt libraries as BINARIES. Every framework is therefore
+    # materialised twice, and the second attempt to create `Resources -> Versions/Current/Resources` in the
+    # same place fails:
+    #
+    #   --onedir  the BUILD dies:  FileExistsError: File exists: 'Versions/Current/Resources' -> '…/<X>.framework/Resources'
+    #   --onefile dereferences the symlinks into duplicate archive entries and the APP dies at launch with
+    #             "Failed to extract …/Resources/Info.plist: File exists"
+    #
+    # HOW THIS WAS DIAGNOSED, because it is the useful part: deleting QtBluetooth.framework first did not
+    # fix it — the identical error moved straight to QtConcurrent — which is what proved the cause was the
+    # collection rather than the framework. The hook collects what the app actually imports (QtCore, QtGui,
+    # QtWidgets, QtNetwork are all in HIDDEN_IMPORTS, plus the platform plugins), so the blanket data sweep
+    # is the redundant half.
+    _drop_collect_pair(cmd, '--collect-data', 'PyQt6')
+
+    # Belt and braces, and honestly still worth it: nothing here imports Bluetooth, so it should not ship.
     _prune_unused_qt_frameworks(['QtBluetooth'])
 
     _run_pyinstaller(cmd)
