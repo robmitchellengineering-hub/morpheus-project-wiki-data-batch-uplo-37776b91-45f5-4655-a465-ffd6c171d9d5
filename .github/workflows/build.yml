@@ -42,6 +42,32 @@ jobs:
       - name: Run behaviour tests
         shell: bash
         run: python -m unittest discover -s tests -v
+      # THE macOS CHECK THAT WAS ALWAYS MISSING, and it needs the console build to exist at all.
+      #
+      # The windowed .app can NEVER be verified on a runner: without a window server its bootloader dies
+      # before Python starts, and PyInstaller's windowed mode detaches stdio, so even a successful launch
+      # prints nothing. Measured here 2026-09-30: the onedir .app now starts (the extraction crash is gone)
+      # and then segfaults under QT_QPA_PLATFORM=offscreen, with no output — expected for a windowed app,
+      # and not evidence either way. So it is not verifiable here, and "NOT VERIFIED" was honest.
+      #
+      # The CONSOLE build is the same modules and the same Qt with a terminal attached, which is exactly
+      # what a headless check needs. It runs BEFORE the windowed build because build.py cleans dist/ first.
+      #
+      # `--diagnose` import-tests every module and prints a summary but NEVER exits non-zero — it writes a
+      # report and carries on — so the step reads the summary and fails on it, or a bundle with dead imports
+      # would ship green (hazard H17).
+      - name: macOS verification (console build, headless)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -o pipefail
+          python build.py --console
+          BIN=dist/WikiDataBatchUploader_debug/WikiDataBatchUploader_debug
+          test -x "$BIN"
+          echo "verifying $(lipo -archs "$BIN" 2>/dev/null || echo 'arch?') on $(uname -m)"
+          QT_QPA_PLATFORM=offscreen "$BIN" --diagnose 2>&1 | tee diag.txt
+          grep -qE "Import summary: [0-9]+ succeeded, 0 failed\." diag.txt
+
       - name: Build with the project's own build script
         shell: bash
         run: |
