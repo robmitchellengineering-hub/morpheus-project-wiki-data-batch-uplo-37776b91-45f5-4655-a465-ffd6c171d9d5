@@ -2,6 +2,10 @@ name: Build
 
 on:
   workflow_dispatch:
+  # TEMPORARY: this branch only, so the architecture fix can be built and verified before it is merged.
+  # Removed before the pull request — `workflow_dispatch` is the deliberate trigger on main.
+  push:
+    branches: [fix/macos-intel-build]
 
 jobs:
   build:
