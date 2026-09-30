@@ -138,7 +138,7 @@ def build_windows(console_mode):
 
     app_name = 'WikiDataBatchUploader_debug' if console_mode else 'WikiDataBatchUploader'
     target_exe_name = app_name + '.exe'
-    cmd = _pyinstaller_base_cmd(app_name, 'dist', 'build', onefile=False)
+    cmd = _pyinstaller_base_cmd(app_name, 'dist', 'build')
     if not console_mode:
         cmd.insert(3, '--windowed')  # after --onedir/--onefile
     cmd.append('main.py')
@@ -191,9 +191,11 @@ def build_macos(console_mode):
     dist_dir, build_dir = _clean_previous_build()
 
     app_name = 'WikiDataBatchUploader_debug' if console_mode else 'WikiDataBatchUploader'
-    cmd = _pyinstaller_base_cmd(app_name, 'dist', 'build')
+    # --onedir on macOS, and build.py's _pyinstaller_base_cmd explains why in full: --onefile cannot
+    # launch at all there, because Qt's symlinked frameworks collide during extraction.
+    cmd = _pyinstaller_base_cmd(app_name, 'dist', 'build', onefile=False)
     if not console_mode:
-        cmd.insert(3, '--windowed')  # after --onefile
+        cmd.insert(3, '--windowed')  # after --onedir
         cmd.insert(4, '--osx-bundle-id')
         cmd.insert(5, 'com.valiantmusic.wikidatauploader')
     cmd.append('main.py')
