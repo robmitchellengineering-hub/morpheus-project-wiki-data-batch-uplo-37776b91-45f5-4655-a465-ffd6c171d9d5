@@ -1,0 +1,27 @@
+# There was no .gitignore at all until 2026-10-01, so simply RUNNING the app in a checkout left
+# __pycache__/ everywhere and `--diagnose` left diagnostic_report.txt in the repo root — and a build left
+# build/ and dist/. That matters more here than in most repos: Morpheus compiles this project from its own
+# copy of the files and pushes them to GitHub, so anything that lands in the working tree can end up
+# committed, and a committed .venv or dist/ is hundreds of megabytes.
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.venv/
+venv/
+env/
+
+# Build output — build.py writes both, and neither belongs in the repository
+build/
+dist/
+*.spec
+
+# What --diagnose writes next to the source when the app is not frozen (config.get_base_dir)
+diagnostic_report.txt
+
+# The app's own scratch
+crash_log.txt
+*.log
+
+.DS_Store
