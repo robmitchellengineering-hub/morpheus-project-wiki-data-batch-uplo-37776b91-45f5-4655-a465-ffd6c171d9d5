@@ -199,3 +199,33 @@ def run_diagnostics(base_dir=None) -> None:
         except Exception:
             # If both fail, there is nothing more we can safely do.
             pass
+
+# The line Morpheus (or an installer, or a person) reads back. Same contract the generated apps use, so one
+# reader understands both: one marker line, and an exit code that is NOT zero when the app is not well.
+SELFTEST_MARKER = 'MORPHEUS-SELFTEST:'
+
+
+def selftest_verdict(success_count, failure_count):
+    """The (exit_code, marker_line) pair for a finished run.
+
+    WHY THIS EXISTS. `run_diagnostics` counted its failures, wrote a report, and then let `main.py` call
+    `sys.exit(0)` — so `--diagnose` could not fail, whatever it found. A check that cannot fail is worse than
+    no check: it reads as a pass, and the report it writes is the only thing that says otherwise, which is
+    exactly the "a window that did nothing" shape this app has already been on the wrong end of. The verdict
+    is a pure function so it can be tested without importing PyQt6 — the app's tests are standard-library
+    only on purpose.
+    """
+    if failure_count:
+        return 1, f'{SELFTEST_MARKER} fail: {failure_count} module(s) failed to import ({success_count} loaded)'
+    if not success_count:
+        # NOTHING EXAMINED IS NOT A CLEAN BILL OF HEALTH. The module list is fixed, so zero modules tested
+        # means the run itself is broken — and reporting that as ok is the precise trap this app's own
+        # verification-coverage rule names.
+        return 1, f'{SELFTEST_MARKER} fail: no modules were examined'
+    return 0, f'{SELFTEST_MARKER} ok: {success_count} module(s) loaded'
+
+    # Last line, and only now: the report above is the detail, this is the verdict. Exiting non-zero is the
+    # whole point — a caller has to be able to tell "the app is not well" from "the app could not be asked".
+    code, line = selftest_verdict(success_count, failure_count)
+    print(line)
+    sys.exit(code)

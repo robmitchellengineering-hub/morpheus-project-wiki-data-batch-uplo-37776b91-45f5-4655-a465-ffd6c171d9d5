@@ -35,8 +35,9 @@ if __name__ == "__main__":
         except Exception:
             base_dir = _ensure_base_dir()
         from core.diagnostics import run_diagnostics
+        # run_diagnostics prints the verdict and exits with it. The `sys.exit(0)` that used to be here made
+        # --diagnose unable to fail: it counted the failures, wrote the report, and reported success anyway.
         run_diagnostics(base_dir)
-        sys.exit(0)
 
     try:
         from PyQt6.QtWidgets import QApplication
