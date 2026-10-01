@@ -12,8 +12,14 @@ class AuthDialog(QtWidgets.QDialog):
     The selected method determines which fields are shown.
     """
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, remember_default=False):
         super().__init__(parent)
+        # `remember_default` is set by Settings, where logging in IS the task the user came to do --
+        # reached from Upload it stays off, because there the login is a step on the way to something
+        # else and saving a password is the user's decision. Without this, going to Settings to set up
+        # an account and pressing OK quietly saved nothing, which is the exact confusion the Settings
+        # entry exists to remove.
+        self._remember_default = bool(remember_default)
         self.setWindowTitle("Wikidata Bot Login")
         self.setModal(True)
         self.resize(400, 250)
@@ -74,6 +80,7 @@ class AuthDialog(QtWidgets.QDialog):
 
         # Remember credentials option
         self.remember_checkbox = QtWidgets.QCheckBox("Remember credentials on this device")
+        self.remember_checkbox.setChecked(self._remember_default)
         layout.addWidget(self.remember_checkbox)
 
         # Button row
