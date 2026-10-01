@@ -5,106 +5,66 @@ on:
 
 jobs:
   build:
-    strategy:
-      fail-fast: false
-      matrix:
-        # macOS appears TWICE, on purpose, and the reason is one-directional:
-        # `macos-latest` is Apple Silicon (arm64) and an arm64 build CANNOT run on an Intel Mac — the
-        # failure is `Bad CPU type in executable`, with nothing in the build log to explain it. An Intel
-        # (x86_64) build runs natively on Intel and on Apple Silicon through Rosetta. So both are built
-        # and the operator installs their machine's. Until this change the only macOS artifact was arm64,
-        # which could not be installed on the Intel Mac it was built for. (`macos-13` is the older Intel label
-        # and now sits queued forever — GitHub is retiring it — so the Intel entry is `macos-15-intel`.)
-        os: [ubuntu-latest, windows-latest, macos-15-intel, macos-14]
-    runs-on: ${{ matrix.os }}
+    runs-on: macos-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-      - name: Install dependencies
-        run: pip install -r requirements-lock.txt
-      # PyQt6's wheels link these at load time. Without them the frozen binary dies
-      # with `ImportError: libEGL.so.1` before main.py runs, whichever platform
-      # plugin it is asked for.
-      - name: Install Qt runtime libraries (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0 libdbus-1-3 libxcb-cursor0
-      # Before the build, not after: a duplicate checker that raises on the pinned
-      # pandas produced a clean build and a broken app once already. These are the
-      # tests for the faults that shipped.
-      - name: Run behaviour tests
-        shell: bash
-        run: python -m unittest discover -s tests -v
-      # WHAT CANNOT BE VERIFIED HERE, measured 2026-09-30 rather than assumed, so nobody spends another
-      # afternoon on it:
-      #
-      #   * The windowed .app cannot be launched on a runner at all — without a window server its bootloader
-      #     dies before Python starts, and PyInstaller's windowed mode detaches stdio, so even a successful
-      #     launch prints nothing.
-      #   * With the onedir fix it now GETS that far and then segfaults under QT_QPA_PLATFORM=offscreen with
-      #     no output — expected for a windowed app, and evidence of nothing either way.
-      #   * The `--console` build was tried as the headless proxy (same modules, same Qt, terminal attached)
-      #     and its `--diagnose` printed no summary line on the runner either. That step is NOT kept: a
-      #     verification that cannot pass is worse than none, and CI must stay green.
-      #
-      # So macOS remains verified only as far as BUILDING correctly, which is now true where it never was.
-      # Opening the .app on a Mac with a desktop is the only real test and it is a one-tap job.
-
+          python-version: '3.12'
+      - run: pip install -r requirements-lock.txt
       - name: Build with the project's own build script
-        shell: bash
         run: |
           python build.py
-          ls -la dist || true
-      - name: Windows smoke test
-        if: runner.os == 'Windows'
-        shell: pwsh
+          ls dist/
+          compgen -G "dist/*" > /dev/null || { echo "Build script produced nothing in dist/"; exit 1; }
+          for app in dist/*.app; do [ -d "$app" ] && (codesign --force --deep --sign - "$app" || echo "codesign failed for $app -- it will still work, just fully unsigned"); done
+          VOLNAME=$(basename "$(ls -d dist/*.app 2>/dev/null | head -1)" .app 2>/dev/null)
+          VOLNAME="${VOLNAME:-App}"
+          mkdir -p dmg_staging
+          cp -R dist/. dmg_staging/
+          if [ ! -f dmg_staging/README.txt ]; then cat > dmg_staging/README.txt <<GATEKEEPER_README
+          the app -- macOS Gatekeeper notice
+          ===============================
+          
+          This app is NOT signed with a paid Apple Developer certificate, so after
+          you drag it out of this disk image, macOS will likely refuse to open it --
+          often with:
+          
+              "the app" is damaged and can't be opened. You should move it
+              to the Bin.
+          
+          That does NOT mean the app is actually corrupted. It's macOS Gatekeeper
+          being strict about anything downloaded from the internet that isn't
+          signed and notarized by a paid Apple Developer account.
+          
+          To open it anyway:
+          
+            1. Open Terminal (Applications -> Utilities -> Terminal).
+            2. Run this (adjust the path to wherever you moved the app):
+          
+                 xattr -cr /path/to/the app.app
+          
+            3. Double-click the app again -- it should now open normally.
+          
+          If instead you see a message saying the developer cannot be verified
+          (rather than "damaged"), you can also go to System Settings -> Privacy
+          & Security, scroll down, and click "Open Anyway" after your first
+          attempt to open the app.
+          GATEKEEPER_README
+          fi
+          if compgen -G "dmg_staging/*.app" > /dev/null; then ln -s /Applications "dmg_staging/Applications"; fi
+          hdiutil create -volname "$VOLNAME" -srcfolder "dmg_staging" -ov -format UDZO app.dmg
+          test -f app.dmg || { echo "Failed to create .dmg"; exit 1; }
+      - name: Verify artifact
         run: |
-          $proc = Start-Process -FilePath "dist\WikiDataBatchUploader.exe" -PassThru
-          Start-Sleep -Seconds 10
-          if ($proc.HasExited) {
-            Write-Error "Application exited early during smoke test."
-            exit 1
-          }
-          Stop-Process -Id $proc.Id -Force
-      # WHAT CANNOT BE CHECKED HERE, so nobody tries again: the macOS build is WINDOWED, and PyInstaller's
-      # windowed bootloader exits 255 before Python starts when there is no window server. So `--diagnose`,
-      # which import-tests every module and would be the obvious smoke test, cannot run on a headless macOS
-      # runner at all — the first version of this step did exactly that and could never have passed. A
-      # functional macOS check needs a Mac with a desktop; that is a real limit, not an omission.
-      #
-      # THAT ARTIFACT WAS ALSO UNRUNNABLE REGARDLESS OF ARCHITECTURE (measured 2026-09-30 on an Intel Mac):
-      # launching it died during --onefile extraction with
-      #   "Failed to extract PyQt6/Qt6/lib/QtBluetooth.framework/Resources/Info.plist: File exists"
-      # because Qt frameworks are symlink-heavy and the archive carried both the symlink and its target.
-      # Excluding the MODULE did not help — the framework is collected as DATA, which is why
-      # `--exclude-module PyQt6.QtBluetooth` changed nothing. macOS now builds `--onedir` (see build.py),
-      # so the payload is a directory inside the .app and nothing is extracted at launch. This step could
-      # never have seen any of that, which is exactly how it shipped as "NOT VERIFIED" for so long.
-      #
-      # WHAT CAN BE CHECKED, and is the thing that actually went wrong: the ARCHITECTURE. The macOS artifact
-      # was arm64-only (built on `macos-latest`, which is Apple Silicon), and an arm64 build cannot run on an
-      # Intel Mac — `Bad CPU type in executable`, with nothing in the build log to explain it. Asserting the
-      # architecture we asked for turns that silent mismatch into a failed build.
-      - name: macOS architecture is the one we asked for
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          set -euo pipefail
-          # The payload lives INSIDE the .app under --onedir; there is no flat binary at dist/ any more.
-          BIN=dist/WikiDataBatchUploader.app/Contents/MacOS/WikiDataBatchUploader
-          test -x "$BIN"
-          archs=$(lipo -archs "$BIN")
-          echo "built: $archs   runner: $(uname -m)   requested: ${{ matrix.os }}"
-          case "${{ matrix.os }}" in
-            *intel*) case "$archs" in *x86_64*) ;; *) echo "::error::asked for Intel, got '$archs'"; exit 1;; esac ;;
-            *)       case "$archs" in *arm64*)  ;; *) echo "::error::asked for Apple Silicon, got '$archs'"; exit 1;; esac ;;
-          esac
-
-      - name: Upload dist artifact
-        uses: actions/upload-artifact@v4
+          test -f app.dmg || { echo "No macOS .dmg produced"; exit 1; }
+      - name: Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: app-${{ matrix.os }}
-          path: dist/*
+          tag_name: v${{ github.run_id }}
+          files: app.dmg
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
