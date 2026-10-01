@@ -8,7 +8,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # macOS appears TWICE, on purpose, and the reason is one-directional:
+        # `macos-latest` is Apple Silicon (arm64) and an arm64 build CANNOT run on an Intel Mac — the
+        # failure is `Bad CPU type in executable`, with nothing in the build log to explain it. An Intel
+        # (x86_64) build runs natively on Intel and on Apple Silicon through Rosetta. So both are built
+        # and the operator installs their machine's. Until this change the only macOS artifact was arm64,
+        # which could not be installed on the Intel Mac it was built for. (`macos-13` is the older Intel label
+        # and now sits queued forever — GitHub is retiring it — so the Intel entry is `macos-15-intel`.)
+        os: [ubuntu-latest, windows-latest, macos-15-intel, macos-14]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -31,6 +38,21 @@ jobs:
       - name: Run behaviour tests
         shell: bash
         run: python -m unittest discover -s tests -v
+      # WHAT CANNOT BE VERIFIED HERE, measured 2026-09-30 rather than assumed, so nobody spends another
+      # afternoon on it:
+      #
+      #   * The windowed .app cannot be launched on a runner at all — without a window server its bootloader
+      #     dies before Python starts, and PyInstaller's windowed mode detaches stdio, so even a successful
+      #     launch prints nothing.
+      #   * With the onedir fix it now GETS that far and then segfaults under QT_QPA_PLATFORM=offscreen with
+      #     no output — expected for a windowed app, and evidence of nothing either way.
+      #   * The `--console` build was tried as the headless proxy (same modules, same Qt, terminal attached)
+      #     and its `--diagnose` printed no summary line on the runner either. That step is NOT kept: a
+      #     verification that cannot pass is worse than none, and CI must stay green.
+      #
+      # So macOS remains verified only as far as BUILDING correctly, which is now true where it never was.
+      # Opening the .app on a Mac with a desktop is the only real test and it is a one-tap job.
+
       - name: Build with the project's own build script
         shell: bash
         run: |
@@ -47,6 +69,40 @@ jobs:
             exit 1
           }
           Stop-Process -Id $proc.Id -Force
+      # WHAT CANNOT BE CHECKED HERE, so nobody tries again: the macOS build is WINDOWED, and PyInstaller's
+      # windowed bootloader exits 255 before Python starts when there is no window server. So `--diagnose`,
+      # which import-tests every module and would be the obvious smoke test, cannot run on a headless macOS
+      # runner at all — the first version of this step did exactly that and could never have passed. A
+      # functional macOS check needs a Mac with a desktop; that is a real limit, not an omission.
+      #
+      # THAT ARTIFACT WAS ALSO UNRUNNABLE REGARDLESS OF ARCHITECTURE (measured 2026-09-30 on an Intel Mac):
+      # launching it died during --onefile extraction with
+      #   "Failed to extract PyQt6/Qt6/lib/QtBluetooth.framework/Resources/Info.plist: File exists"
+      # because Qt frameworks are symlink-heavy and the archive carried both the symlink and its target.
+      # Excluding the MODULE did not help — the framework is collected as DATA, which is why
+      # `--exclude-module PyQt6.QtBluetooth` changed nothing. macOS now builds `--onedir` (see build.py),
+      # so the payload is a directory inside the .app and nothing is extracted at launch. This step could
+      # never have seen any of that, which is exactly how it shipped as "NOT VERIFIED" for so long.
+      #
+      # WHAT CAN BE CHECKED, and is the thing that actually went wrong: the ARCHITECTURE. The macOS artifact
+      # was arm64-only (built on `macos-latest`, which is Apple Silicon), and an arm64 build cannot run on an
+      # Intel Mac — `Bad CPU type in executable`, with nothing in the build log to explain it. Asserting the
+      # architecture we asked for turns that silent mismatch into a failed build.
+      - name: macOS architecture is the one we asked for
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The payload lives INSIDE the .app under --onedir; there is no flat binary at dist/ any more.
+          BIN=dist/WikiDataBatchUploader.app/Contents/MacOS/WikiDataBatchUploader
+          test -x "$BIN"
+          archs=$(lipo -archs "$BIN")
+          echo "built: $archs   runner: $(uname -m)   requested: ${{ matrix.os }}"
+          case "${{ matrix.os }}" in
+            *intel*) case "$archs" in *x86_64*) ;; *) echo "::error::asked for Intel, got '$archs'"; exit 1;; esac ;;
+            *)       case "$archs" in *arm64*)  ;; *) echo "::error::asked for Apple Silicon, got '$archs'"; exit 1;; esac ;;
+          esac
+
       - name: Upload dist artifact
         uses: actions/upload-artifact@v4
         with:

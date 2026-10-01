@@ -30,6 +30,13 @@ EXCLUDE_MODULES = [
     'matplotlib', 'scipy', 'IPython', 'tkinter',
     'PyQt6.QtWebEngineWidgets', 'PyQt6.QtPdf', 'PyQt6.QtQml',
     'PyQt6.QtCharts', 'PyQt6.QtDataVisualization',
+    # Unused, so it does not belong in the bundle. NOTE: this does NOT fix the macOS launch crash
+    # measured 2026-09-30 — "Failed to extract .../QtBluetooth.framework/Resources/Info.plist: File
+    # exists" — because the framework is collected as DATA, not as this module, so the archive still
+    # carries it. The real fix is building macOS with --onedir instead of --onefile. Kept because an
+    # unused module should not be bundled either way, and the comment is here so nobody mistakes it for
+    # the fix the next time the Mac build will not start.
+    'PyQt6.QtBluetooth',
 ]
 
 
@@ -88,8 +95,17 @@ def _clean_previous_build():
     return dist_dir, build_dir
 
 
-def _pyinstaller_base_cmd(app_name, dist_dir, build_dir):
-    cmd = [sys.executable, '-m', 'PyInstaller', '--onefile']
+def _pyinstaller_base_cmd(app_name, dist_dir, build_dir, onefile=True):
+    # `onefile=False` gives --onedir, and on macOS that is not a preference. With --onefile, PyInstaller
+    # flattens Qt's symlinked frameworks into duplicate copies inside the archive, and extraction of the
+    # ~120 MB payload dies at launch with:
+    #   Failed to extract PyQt6/Qt6/lib/QtBluetooth.framework/Resources/Info.plist: File exists
+    # before Python ever starts — measured 2026-09-30 on an Intel Mac, reproducibly, after clearing the
+    # _MEI temp dirs, on a build whose smoke test had passed on the runner (the runner never launched the
+    # windowed bundle, so nothing ever caught it). --onedir ships the payload as a directory inside the
+    # .app: nothing is extracted, so the collision cannot happen, and the 120 MB unpack disappears from
+    # every launch as a bonus. Windows and Linux keep --onefile, where both work and the smoke test passes.
+    cmd = [sys.executable, '-m', 'PyInstaller', '--onedir' if not onefile else '--onefile']
     cmd += ['--name', app_name, '--clean', '--noconfirm',
             '--distpath', dist_dir, '--workpath', build_dir, '--specpath', build_dir]
     for pkg, flag in COLLECT_PACKAGES:
@@ -124,7 +140,7 @@ def build_windows(console_mode):
     target_exe_name = app_name + '.exe'
     cmd = _pyinstaller_base_cmd(app_name, 'dist', 'build')
     if not console_mode:
-        cmd.insert(3, '--windowed')  # after --onefile
+        cmd.insert(3, '--windowed')  # after --onedir/--onefile
     cmd.append('main.py')
 
     _run_pyinstaller(cmd)
@@ -159,6 +175,51 @@ def build_windows(console_mode):
     print('Build complete. Executable is in dist/')
 
 
+
+def _prune_unused_qt_frameworks(names):
+    """Delete Qt frameworks this app never loads, which PyInstaller cannot collect on macOS.
+
+    MEASURED 2026-09-30, and this is the real root cause of the macOS build never working.
+    `QtBluetooth.framework` is collected TWICE — once as data by `--collect-data PyQt6`, once by
+    PyInstaller's own PyQt6 hook — and the two copies disagree about its symlinks, specifically
+    `Resources -> Versions/Current/Resources`. The two failure modes are the same bug:
+
+      * `--onedir` preserves the symlinks and the BUILD dies:
+          FileExistsError: File exists: 'Versions/Current/Resources' -> '.../QtBluetooth.framework/Resources'
+      * `--onefile` dereferences them into duplicate entries and the APP dies at launch:
+          Failed to extract .../QtBluetooth.framework/Resources/Info.plist: File exists
+
+    Either way the macOS artifact has never been runnable, and `--exclude-module PyQt6.QtBluetooth` does
+    not help because the framework arrives as DATA, not as that module. Nothing in this app imports
+    Bluetooth, so the framework is deleted from the package before PyInstaller looks at it.
+    """
+    try:
+        import PyQt6  # noqa: F401  (only needed to locate the Qt tree)
+    except Exception as e:  # pragma: no cover - a missing PyQt6 fails the build properly further on
+        print(f'Could not locate PyQt6 to prune Qt frameworks: {e}')
+        return
+    lib = os.path.join(os.path.dirname(PyQt6.__file__), 'Qt6', 'lib')
+    removed = []
+    for name in names:
+        target = os.path.join(lib, f'{name}.framework')
+        if os.path.isdir(target):
+            shutil.rmtree(target, ignore_errors=True)
+            removed.append(name)
+    print(f'Pruned unused Qt frameworks: {", ".join(removed) if removed else "none were present"}')
+
+
+
+def _drop_collect_pair(cmd, flag, pkg):
+    """Remove a `--collect-<flag> <pkg>` pair from a PyInstaller command, if present."""
+    try:
+        i = cmd.index(flag)
+    except ValueError:
+        return cmd
+    if i + 1 < len(cmd) and cmd[i + 1] == pkg:
+        del cmd[i:i + 2]
+    return cmd
+
+
 def build_macos(console_mode):
     # Mirrors build_windows above -- same PyInstaller args/collected
     # packages, since PyQt6/pandas/wikidataintegrator etc. need the same
@@ -175,19 +236,42 @@ def build_macos(console_mode):
     dist_dir, build_dir = _clean_previous_build()
 
     app_name = 'WikiDataBatchUploader_debug' if console_mode else 'WikiDataBatchUploader'
-    cmd = _pyinstaller_base_cmd(app_name, 'dist', 'build')
+    # --onedir on macOS, and build.py's _pyinstaller_base_cmd explains why in full: --onefile cannot
+    # launch at all there, because Qt's symlinked frameworks collide during extraction.
+    cmd = _pyinstaller_base_cmd(app_name, 'dist', 'build', onefile=False)
     if not console_mode:
-        cmd.insert(3, '--windowed')  # after --onefile
+        cmd.insert(3, '--windowed')  # after --onedir
         cmd.insert(4, '--osx-bundle-id')
         cmd.insert(5, 'com.valiantmusic.wikidatauploader')
     cmd.append('main.py')
 
+    # THE ROOT CAUSE, and it is a double collection rather than any one framework.
+    #
+    # `--collect-data PyQt6` sweeps the whole `Qt6/` tree, `.framework` directories included, while
+    # PyInstaller's own PyQt6 hook collects the same Qt libraries as BINARIES. Every framework is therefore
+    # materialised twice, and the second attempt to create `Resources -> Versions/Current/Resources` in the
+    # same place fails:
+    #
+    #   --onedir  the BUILD dies:  FileExistsError: File exists: 'Versions/Current/Resources' -> '…/<X>.framework/Resources'
+    #   --onefile dereferences the symlinks into duplicate archive entries and the APP dies at launch with
+    #             "Failed to extract …/Resources/Info.plist: File exists"
+    #
+    # HOW THIS WAS DIAGNOSED, because it is the useful part: deleting QtBluetooth.framework first did not
+    # fix it — the identical error moved straight to QtConcurrent — which is what proved the cause was the
+    # collection rather than the framework. The hook collects what the app actually imports (QtCore, QtGui,
+    # QtWidgets, QtNetwork are all in HIDDEN_IMPORTS, plus the platform plugins), so the blanket data sweep
+    # is the redundant half.
+    _drop_collect_pair(cmd, '--collect-data', 'PyQt6')
+
+    # Belt and braces, and honestly still worth it: nothing here imports Bluetooth, so it should not ship.
+    _prune_unused_qt_frameworks(['QtBluetooth'])
+
     _run_pyinstaller(cmd)
 
     if console_mode:
-        # --onefile without --windowed produces a plain executable on
-        # macOS too, not a .app bundle.
-        executable_path = os.path.join(dist_dir, app_name)
+        # --onedir without --windowed produces a plain executable inside a
+        # directory on macOS, not a .app bundle and not a flat file.
+        executable_path = os.path.join(dist_dir, app_name, app_name)
         if not os.path.exists(executable_path) or os.path.getsize(executable_path) == 0:
             print(f'PyInstaller produced no valid executable at expected location: {executable_path}')
             sys.exit(1)
