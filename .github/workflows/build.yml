@@ -5,7 +5,15 @@ on:
 
 jobs:
   build:
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            arch: intel
+          - runner: macos-latest
+            arch: apple-silicon
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: write
     steps:
@@ -22,8 +30,16 @@ jobs:
           for app in dist/*.app; do [ -d "$app" ] && (codesign --force --deep --sign - "$app" || echo "codesign failed for $app -- it will still work, just fully unsigned"); done
           VOLNAME=$(basename "$(ls -d dist/*.app 2>/dev/null | head -1)" .app 2>/dev/null)
           VOLNAME="${VOLNAME:-App}"
+          APP_BIN=$(ls -d dist/*.app/Contents/MacOS/* 2>/dev/null | head -1)
+          ARCHS=$(lipo -archs "$APP_BIN" 2>/dev/null || echo unknown)
+          echo "Mach-O architectures produced: $ARCHS (runner: $(uname -m), matrix leg: ${{ matrix.arch }})"
           mkdir -p dmg_staging
-          cp -R dist/. dmg_staging/
+          if compgen -G "dist/*.app" > /dev/null; then
+            cp -R dist/*.app dmg_staging/
+            if [ -f dist/README.txt ]; then cp dist/README.txt dmg_staging/; fi
+          else
+            rsync -a --exclude '*.dmg' --exclude '*.zip' dist/ dmg_staging/
+          fi
           if [ ! -f dmg_staging/README.txt ]; then cat > dmg_staging/README.txt <<GATEKEEPER_README
           the app -- macOS Gatekeeper notice
           ===============================
@@ -54,17 +70,18 @@ jobs:
           attempt to open the app.
           GATEKEEPER_README
           fi
+          printf "\nThis build was compiled for: %s (%s)\n" "${{ matrix.arch }}" "$ARCHS" >> dmg_staging/README.txt
           if compgen -G "dmg_staging/*.app" > /dev/null; then ln -s /Applications "dmg_staging/Applications"; fi
-          hdiutil create -volname "$VOLNAME" -srcfolder "dmg_staging" -ov -format UDZO app.dmg
-          test -f app.dmg || { echo "Failed to create .dmg"; exit 1; }
+          hdiutil create -volname "$VOLNAME" -srcfolder "dmg_staging" -ov -format UDZO app-macos-${{ matrix.arch }}.dmg
+          test -f app-macos-${{ matrix.arch }}.dmg || { echo "Failed to create .dmg"; exit 1; }
       - name: Verify artifact
         run: |
-          test -f app.dmg || { echo "No macOS .dmg produced"; exit 1; }
+          test -f app-macos-${{ matrix.arch }}.dmg || { echo "No macOS .dmg produced"; exit 1; }
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ github.run_id }}
-          files: app.dmg
+          files: app-macos-${{ matrix.arch }}.dmg
           fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
