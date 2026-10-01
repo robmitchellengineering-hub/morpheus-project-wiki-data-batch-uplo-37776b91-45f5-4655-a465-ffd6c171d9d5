@@ -11,6 +11,7 @@ import os
 import sys
 import importlib
 import importlib.metadata
+import threading
 import traceback
 import datetime
 from pathlib import Path
@@ -42,6 +43,41 @@ def _get_env_snapshot() -> dict:
     return {key: os.environ.get(key, '<not set>') for key in env_keys}
 
 
+# A KEYCHAIN READ CAN BLOCK FOREVER, AND THE SELF-TEST MUST NOT.
+#
+# MEASURED 2026-10-01 by running the app from a source checkout: `python main.py --diagnose` never finished
+# and never printed a verdict. It was not the unreachable `return` alone — the run hung earlier, inside
+# `_get_ai_config_snapshot`, on `credential_storage.load_morpheus_token()`. That reads the macOS Keychain,
+# and when the item needs authorising from a process macOS has not seen before, the read blocks on a system
+# prompt that never appears for a command-line run. The report was never written and the verdict was never
+# reached, so the failure looked like "the app did nothing".
+#
+# A diagnostic that can hang is not a diagnostic. The read gets a deadline in a daemon thread; if the
+# keychain does not answer, the snapshot says so and the run continues. A daemon thread cannot hold the
+# process open, so a stuck read costs the timeout and nothing else.
+KEYCHAIN_TIMEOUT_SECONDS = 5
+
+
+def _read_with_timeout(read, seconds=KEYCHAIN_TIMEOUT_SECONDS):
+    """Run `read()` in a daemon thread. Returns (answered, value); never blocks longer than `seconds`."""
+    box = {}
+
+    def run():
+        try:
+            box['value'] = read()
+        except Exception as exc:  # the caller's own except turns this into a report line
+            box['error'] = exc
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    thread.join(seconds)
+    if thread.is_alive():
+        return False, None
+    if 'error' in box:
+        raise box['error']
+    return True, box.get('value')
+
+
 def _get_ai_config_snapshot() -> dict:
     """Return AI mapping configuration status — Morpheus Connect first
     (the primary path), then the Advanced custom endpoint if that's what's
@@ -53,8 +89,13 @@ def _get_ai_config_snapshot() -> dict:
     try:
         from core import credential_storage
         from core import settings as app_settings
-        connected = bool(credential_storage.load_morpheus_token())
-        snapshot = {'morpheus_connect': 'connected' if connected else 'not connected'}
+        answered, token = _read_with_timeout(credential_storage.load_morpheus_token)
+        connected = bool(token) if answered else False
+        snapshot = {'morpheus_connect': (
+            ('connected' if connected else 'not connected') if answered
+            else f'unknown - the keychain did not answer within {KEYCHAIN_TIMEOUT_SECONDS}s (it can be '
+                 'waiting on an authorisation prompt; the rest of this report is unaffected)'
+        )}
         if not connected:
             endpoint = app_settings.get_ai_endpoint_url()
             snapshot['advanced_endpoint'] = endpoint if endpoint else '<not set>'
@@ -125,13 +166,17 @@ def _run_import_tests() -> dict:
     return results
 
 
-def run_diagnostics(base_dir=None) -> None:
-    """Collect diagnostics and write a report to the base directory.
+def run_diagnostics(base_dir=None) -> int:
+    r"""Collect diagnostics, write a report, print the verdict and return its exit code.
 
     Args:
         base_dir: Optional path (str or Path) to the writable base directory.
             If None, attempts to import and use config.BASE_DIR, then falls
             back to %APPDATA%\WikidataBatchUploader.
+
+    Raw because of that backslash: a plain string made Python warn
+    `SyntaxWarning: invalid escape sequence '\W'` on every run, on stderr — in the one command whose whole
+    job is to be read back cleanly by a person or an installer.
     """
     if base_dir is None:
         base_dir = _ensure_base_dir()
@@ -200,6 +245,21 @@ def run_diagnostics(base_dir=None) -> None:
             # If both fail, there is nothing more we can safely do.
             pass
 
+    # THE VERDICT IS THE LAST THING THIS FUNCTION DOES, AND UNTIL 2026-10-01 IT NEVER HAPPENED.
+    #
+    # The print-and-exit that carried the verdict sat after a `return` at the very bottom of this module —
+    # unreachable — so `--diagnose` counted its failures, wrote the report, printed nothing and exited 0,
+    # and main.py then fell through into the GUI. `selftest_verdict` was correct the whole time and its unit
+    # test passed, because that test calls the pure function and never the wiring. A self-test whose failure
+    # cannot be observed is worse than no self-test: the app's own manual, the compiled-app installer and
+    # the whole `MORPHEUS-SELFTEST:` contract all tell the operator to run this and believe it.
+    #
+    # Returning the code rather than calling sys.exit() keeps this testable: main.py exits with it, and the
+    # test asserts the printed line and the code together, which is the pair a caller actually reads.
+    code, line = selftest_verdict(success_count, failure_count)
+    print(line)
+    return code
+
 # The line Morpheus (or an installer, or a person) reads back. Same contract the generated apps use, so one
 # reader understands both: one marker line, and an exit code that is NOT zero when the app is not well.
 SELFTEST_MARKER = 'MORPHEUS-SELFTEST:'
@@ -223,9 +283,3 @@ def selftest_verdict(success_count, failure_count):
         # verification-coverage rule names.
         return 1, f'{SELFTEST_MARKER} fail: no modules were examined'
     return 0, f'{SELFTEST_MARKER} ok: {success_count} module(s) loaded'
-
-    # Last line, and only now: the report above is the detail, this is the verdict. Exiting non-zero is the
-    # whole point — a caller has to be able to tell "the app is not well" from "the app could not be asked".
-    code, line = selftest_verdict(success_count, failure_count)
-    print(line)
-    sys.exit(code)
