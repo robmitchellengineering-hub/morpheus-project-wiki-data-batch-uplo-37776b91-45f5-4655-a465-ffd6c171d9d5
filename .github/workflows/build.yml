@@ -17,6 +17,398 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Write the user manual
+        run: |
+          cat > USER-MANUAL.txt <<'MORPHEUS-USER-MANUAL-END'
+          ==========================================================================
+          morpheus-project-wiki-data-batch-uplo-37776b91-45f5-4655-a465-ffd6c171d9d5 — user manual
+          ==========================================================================
+          
+            What this is : a macOS App build, compiled for you by Morpheus
+            Generated    : 2026-10-02
+          
+            This file travelled with your download. It covers installing the app, starting it, and
+            the things that platform does to unsigned software. It is written from what Morpheus
+            knew at compile time — for what the app does once it is running, see the project's own
+            notes at the bottom.
+          
+          WHICH DOWNLOAD IS MINE?
+            This build published more than one file. They are the same app built for different
+            machines — installing the wrong one gives you "not supported on this Mac" or a
+            crossed-out icon, not a broken file.
+            - app-macos-intel.dmg - for an Intel Mac
+            - app-macos-apple-silicon.dmg - for an Apple-silicon Mac (M1 and later)
+          
+          INSTALLING IT (macOS App)
+            You downloaded a disk image (.dmg).
+              1. Double-click it — Finder mounts it like a USB stick.
+              2. Drag the app onto the Applications shortcut sitting next to it.
+              3. Eject the disk image (the eject arrow beside it in Finder).
+          
+          STARTING IT
+            The menu bar for a Mac app is at the TOP OF THE SCREEN, next to the  logo — not inside the
+            window. If a window looks empty, click it once and look up there.
+          
+          IF IT WILL NOT OPEN, OR WILL NOT START
+            NOT SIGNED: this app is not signed with a paid Apple Developer certificate, so macOS will
+            probably refuse the first launch — "Apple could not verify ... is free of malware", or the
+            older "...is damaged and can't be opened. You should move it to the Bin." It is not damaged.
+              Fix: open Terminal (Applications -> Utilities) and run, with the path to YOUR app:
+                  xattr -cr /Applications/YourApp.app
+              Then open it again. Or: System Settings -> Privacy & Security, scroll down, and click
+              "Open Anyway" after the first attempt.
+            CROSSED-OUT ICON (a circle with a line through it): that means the build is for a different
+            kind of Mac, not that the file is broken. Download the other one — "intel" for an Intel Mac,
+            "apple-silicon" for an M-series Mac. Apple menu -> About This Mac names your chip.
+          
+          CONNECTING IT TO MORPHEUS
+            Some compiled apps can sign in to Morpheus from inside the app, so the work they do is
+            billed to your own account. That is a device login: the app shows a short code, you
+            approve it in your browser on the Morpheus site, and the app picks up a token scoped to
+            one capability. If the app has no such screen, it does not need one.
+          
+          --------------------------------------------------------------------------
+          THE PROJECT'S OWN NOTES (README.md)
+          --------------------------------------------------------------------------
+          
+            Everything below is quoted from the project itself, not written by Morpheus.
+          
+          # WikiData Batch Uploader
+          
+          A cross-platform desktop client for bulk-uploading datasets to Wikidata, with an interface modeled after Wikidata itself.
+          
+          ## Features
+          
+          - Scan local folders for data sheets (`.xlsx`, `.csv`) and images (`.jpg`, `.jpeg`, `.png`, `.tif`, `.tiff`).
+          - Load tabular data into a preview grid for review.
+          - Extract image metadata locally: EXIF, GPS, camera make/model, IPTC, XMP, PNG text chunks.
+          - **Fill fields from photo metadata**: match spreadsheet rows to photos by filename and pull GPS coordinates, date taken, and camera model straight into new columns — ready to map to a property like P625 (coordinate location).
+          - Schema mapping: match spreadsheet columns to Wikidata properties using local reference tables, with fuzzy suggestions.
+          - Project constants: apply fixed statements (e.g., instance of (P31) = village (Q532)) to every uploaded item.
+          - Secure bot-password and OAuth authentication (credentials stored in the operating system's secure keyring — Windows Credential Locker, macOS Keychain, or Linux Secret Service).
+          - Dry-run preview with validation before any write.
+          - Live upload via WikidataIntegrator, with configurable delay between rows to respect rate limits.
+          - Persistent settings (edit summary, upload delay) stored using the operating system's native configuration mechanisms (Windows registry, macOS plist, Linux config file).
+          - **Lazy loading** for large datasets: only the first 500 rows are shown initially; full data is loaded in the background only when needed for dry-run or upload.
+          - **In-app reference table editing**: modify Wikidata property mappings and project constants directly from the application.
+          - **Duplicate detection**: identify and optionally skip rows that appear to already exist on Wikidata, and detect duplicates within the input batch.
+          - **Wikimedia Commons upload**: queue local media files, map metadata (description, category, license) from EXIF/IPTC or manual entry, and run a local pre-flight dry-run validation before uploading.
+          
+          ## Requirements
+          
+          - Windows 10 or later, macOS 11 or later, or a modern Linux distribution (for running the packaged application).
+          - Python 3.10 or later (for development and building from source).
+          - Dependencies listed in `requirements.txt`.
+            - **Note:** PyInstaller is required for building the executable but is **not** included in `requirements.txt` (to keep runtime dependencies minimal). Install it separately with `pip install pyinstaller`.
+          
+          ## Setup (Development)
+          
+          1. Clone or download this repository.
+          2. Install dependencies:
+          
+             ```
+             pip install -r requirements.txt
+             pip install pyinstaller   # only if you plan to build
+             ```
+          
+          3. Run the application:
+          
+             ```
+             python main.py
+             ```
+          
+          ## Building the Application
+          
+          A single, reproducible build is defined in `requirements-lock.txt` and `build.py` at the repository root. Do not use any other build scripts; they are obsolete.
+          
+          1. Install the locked build dependencies:
+          
+             ```
+             pip install -r requirements-lock.txt
+             ```
+          
+          2. Run the build script:
+          
+             ```
+             python build.py
+             ```
+          
+             The build script detects your operating system and produces the appropriate standalone artifact:
+             - **Windows**: a single `.exe` at `dist/WikiDataBatchUploader.exe`.
+             - **macOS**: a `.dmg` at `dist/WikiDataBatchUploader.dmg`.
+             - **Linux**: a standalone binary at `dist/WikiDataBatchUploader`.
+          
+             It assumes all dependencies (including PyInstaller) are already installed via `pip install -r requirements-lock.txt`, collects all required packages via `--collect-all`, verifies that the output artifact exists and is non-empty, and performs a startup smoke test: launches the built application, waits 5 seconds, and fails the build if it exits early.
+          
+             The CI workflow (`.github/workflows/build.yml`) builds all three platforms in parallel and performs smoke tests on each.
+          
+          You can distribute this single self-contained artifact. No Python installation is required on the target machine.
+          
+          ### Debug Console Build
+          
+          For troubleshooting crashes or diagnosing startup errors, build a debug version that opens a console/terminal window and displays stdout/stderr:
+          
+          ```
+          python build.py --console
+          ```
+          
+          The resulting executable will be named `WikiDataBatchUploader_debug` with the appropriate platform extension (`.exe` on Windows, no extension on macOS/Linux). On macOS the debug version may be placed inside the `.app` bundle. This version is not windowed, so you can see error messages that might be hidden in the standard windowed build. All heavy operations (dry-run, upload, duplicate check) run on background worker threads, and all UI updates from those threads are queued safely to the main GUI thread, ensuring thread safety and responsiveness.
+          
+          ## Usage
+          
+          1. Launch the application (`WikiDataBatchUploader.exe` on Windows, the `.app` bundle on macOS, or the `WikiDataBatchUploader` binary on Linux).
+          2. From the **File** menu, choose **Open Folder...** (Ctrl+O). Select a folder containing your data sheets and/or images.
+          3. Files appear in the left sidebar. Click a file:
+             - **Tabular files (`.xlsx`, `.csv`)**: Opens the preview and mapping view.
+               - The top pane shows a read-only preview of the first 500 rows (see [Lazy Loading](#lazy-loading)).
+               - The bottom pane contains the mapping panel and upload controls.
+               - In the mapping panel, each column has a dropdown to select a Wikidata property. Use **Suggest Mappings** to auto-fill based on fuzzy matching against the property labels in `wikidata_properties.xlsx`.
+               - Project constants are displayed read-only.
+               - You can mark columns as **duplicate keys** by checking the checkbox in the mapping table. These columns are used to detect whether a row already exists on Wikidata (see [Duplicate Detection](#duplicate-detection)).
+             - **Images**: Displays the image and a table of extracted metadata (EXIF, GPS, IPTC, etc.).
+          4. To upload:
+             - Map at least one column to a property.
+             - (Optional) Click **Check Existing Items** to scan the dataset against Wikidata for potential duplicates using the columns you marked as duplicate keys. The app will highlight rows that appear to already exist.
+             - Click **Dry Run** to see a summary of what would be uploaded and any validation warnings. The first time you run a dry-run on a large dataset, the app will load the full data in the background; a status message will indicate this.
+             - If the dry-run looks good, click **Upload**. You will be prompted for bot credentials (first time) and an edit summary.
+             - The upload runs in the background; progress is shown in the status label. Wait for completion.
+          
+          ## Lazy Loading
+          
+          To keep the interface responsive, the application only loads a **preview** of the first **500 rows** when you select a spreadsheet. This is enough for mapping columns and exploring structure without waiting for massive files.
+          
+          When you click **Dry Run**, **Check Existing Items**, or **Upload**, the application automatically loads the **entire dataset** in the background. You will see a "Loading full data..." status message and the buttons will be temporarily disabled. Once complete, the requested operation proceeds automatically.
+          
+          This behavior is transparent: the preview data is used solely for display and mapping; all validation and upload operations use the full data.
+          
+          ## Duplicate Detection
+          
+          The application helps you avoid creating duplicate items on Wikidata in two ways:
+          
+          ### Within-Batch Duplicate Detection
+          
+          Before uploading, the app automatically checks the dataset for rows that have identical values across all mapped columns. If such duplicates exist, you will see a warning dialog showing the number of duplicate groups and affected rows. You can choose to continue (all rows will be uploaded as separate items) or abort to correct the data.
+          
+          ### Existing Item Check
+          
+          You can use the **Check Existing Items** button to query Wikidata for items that may already represent the data in your rows. This feature requires you to mark one or more columns as **duplicate keys** in the mapping table (via checkboxes). When you run the check:
+          
+          - The app builds a SPARQL query using the values from those columns and their mapped Wikidata properties.
+          - It runs the query against Wikidata's SPARQL endpoint.
+          - Rows that match existing items are recorded.
+          - After the check, when you click **Upload**, you will be asked whether to skip these rows. You can choose to skip them (recommended) or upload them anyway.
+          
+          **Important:** The duplicate key columns should contain values that are both distinctive and stable for a given entity (e.g., a unique identifier, a combination of name and location). Using poorly chosen keys may result in false positives.
+          
+          ## Uploading to Wikimedia Commons
+          
+          The application can also upload media files (`.jpg`, `.jpeg`, `.png`, `.tif`, `.tiff`) to [Wikimedia Commons](https://commons.wikimedia.org). From the **File** menu choose **Upload to Wikimedia Commons...** (Ctrl+U). The dialog opens with a queue where you add files, preview them, and map metadata fields.
+          
+          ### Metadata Mapping
+          Each file can have the following fields set, either manually or automatically from the file's embedded metadata (EXIF/IPTC) where available:
+          - **Description** — the file description shown on Commons (required).
+          - **Category** — a Commons category applied to the upload.
+          - **License template** — a valid Commons license template (default set in Settings).
+          - **Date taken** — from EXIF `DateTimeOriginal` (optional).
+          - **Author** — from metadata or manual entry.
+          
+          ### Pre-flight Dry-Run Validation
+          Before any data is sent to Commons, the **Validate (Dry Run)** button performs local checks on every file without writing anything:
+          - The file exists and is readable.
+          - The file extension is one of the supported image types.
+          - Required metadata (description, category, license template) is present and non-empty.
+          - The license template resolves to a known Commons-compatible template (basic pattern check).
+          - Optional fields are well-formed (e.g., date format).
+          
+          If validation passes, a summary is shown and you can proceed to **Upload**. If any file fails, the errors are listed and upload is blocked until resolved.
+          
+          ### Upload
+          When you click **Upload**, the files are uploaded one by one in a background worker using your stored Commons OAuth credentials. Progress is shown in the status bar. A summary is displayed at the end, including any per-file errors. You must have configured Commons credentials first via **Settings**; the application reuses the same keyring as Wikidata credentials.
+          
+          ## Filling Fields from Photo Metadata
+          
+          If your spreadsheet has a column naming each row's photo file, and those photos are in the same folder as the spreadsheet, click **Fill from Photos...** to pull data straight from each photo's EXIF/IPTC metadata into new columns:
+          
+          - **GPS coordinates** → a `GPS Coordinates` column, formatted as `latitude,longitude`. Map this column to **P625 (coordinate location)** and it uploads as a real Wikidata globe-coordinate claim (not just text).
+          - **Date taken** → a `Date Taken` column (`YYYY-MM-DD`), from the photo's EXIF `DateTimeOriginal`.
+          - **Camera model** → a `Camera Model` column, from the photo's EXIF `Model` tag.
+          
+          Rows are matched to photos by filename (with or without the extension, case-insensitive). Only empty cells are filled unless you check **Overwrite existing values**. Any row without a matching photo, or a matching photo with no GPS/date/camera data, is left untouched and counted in the summary shown after the fill runs.
+          
+          ## AI-Powered Schema Mapping
+          
+          The application can optionally use a remote AI endpoint to suggest column-to-property mappings based on a sample of your data. This is useful when local fuzzy matching is insufficient or the schema is ambiguous.
+          
+          ### How It Works
+          
+          1. When you click **AI Suggest** in the mapping panel, the app sends the column headers and up to **5 sample rows** to a configurable endpoint.
+          2. The endpoint analyzes the data context and returns a JSON response:
+             ```json
+             {
+               "mappings": [
+                 {"column": "name", "label": "inception"},
+                 {"column": "country", "label": "country"}
+               ]
+             }
+             ```
+          3. The app then matches each returned label against the local `wikidata_properties.xlsx` to obtain the property ID, and updates the mapping dropdowns accordingly.
+          4. If the endpoint is not configured or the request fails, the app automatically falls back to local fuzzy mapping.
+          
+          ### Configuration — Connect to Morpheus
+          
+          AI mapping runs on your own Morpheus account and credits — no shared key, no
+          environment variables to set:
+          
+          1. Open **Settings** in the app.
+          2. Under **AI Mapping — Morpheus Connect**, click **Connect...**.
+          3. A short code appears. Either enter it at [morpheus.nz/connect](https://morpheus.nz/connect),
+             or click the button in the dialog to open it directly (on your phone or another
+             device is fine — approval happens in a browser, not necessarily on this machine).
+          4. Once approved, the dialog closes automatically and Settings shows **Connected**.
+          
+          That's it — the **AI Suggest** button now sends column headers and up to 5 sample rows
+          to Morpheus, billed against your own account. Nothing is shared with other operators
+          running this same build.
+          
+          To disconnect, open Settings and click **Disconnect** — this only removes the saved
+          connection on this machine; it doesn't affect your Morpheus account.
+          
+          ### Advanced: Custom AI Endpoint
+          
+          If you'd rather bring your own AI mapping endpoint instead of using Morpheus Connect,
+          Settings has an **Advanced: Custom AI Endpoint** section (endpoint URL + optional API
+          key). This is only used when Morpheus Connect isn't set up — if you're connected to
+          Morpheus, that always takes priority. The endpoint is expected to return
+          `{"mappings": [{"column": "...", "label": "..."}]}` for a POST of
+          `{"columns": [...], "samples": [[...], ...]}`.
+          
+          If neither is configured, the **AI Suggest** button falls back to local fuzzy matching.
+          
+          ## Reference Tables
+          
+          The application uses two Excel files stored in `reference_tables/`:
+          
+          - `wikidata_properties.xlsx` — columns: `property_id`, `label`. Example: `P571`, `inception`.
+          - `project_constants.xlsx` — columns: `property_id`, `value`. Example: `P31`, `Q532` (instance of village).
+          
+          When you run the app, it checks for these files. If they are missing, sample files are generated automatically.
+          
+          **Location:**
+          - **Development mode**: In the project root, alongside `main.py`.
+          - **Packaged app mode**: In a user-writable directory:
+            - Windows: `%APPDATA%\WikidataBatchUploader\reference_tables`
+            - macOS: `~/Library/Application Support/WikidataBatchUploader/reference_tables`
+            - Linux: `$XDG_DATA_HOME/WikidataBatchUploader/reference_tables` (or `~/.local/share/WikidataBatchUploader/reference_tables` if `$XDG_DATA_HOME` is not set)
+            The base folder is created automatically. This location ensures that changes you make to the reference tables persist between runs and do not require administrator rights.
+          
+          You can edit these files with Excel to customize property labels and project constants.
+          
+          **In-App Editing:**
+          The application also provides a built-in editor. From the **File** menu, choose **Edit Reference Tables...**. A dialog opens with two tabs: **Wikidata Properties** and **Project Constants**. You can add, delete, and modify rows directly. When you save, the changes are written to the Excel files, and the mapping view is refreshed to reflect the new property list and constants immediately.
+          
+          ## Credentials & Security
+          
+          The application supports two authentication methods: **bot passwords** and **OAuth 1.0a**.
+          
+          ### Bot Password (Basic)
+          
+          - Create a bot password at [Special:BotPasswords](https://www.wikidata.org/wiki/Special:BotPasswords).
+            - Grant: Edit existing pages; Create, edit, and move pages; High-volume editing (if needed).
+          - The bot username will look like `YourUsername@BotName`.
+          - Enter the bot username and bot password in the login dialog when prompted.
+          
+          ### OAuth 1.0a (Recommended for High-Volume Bots)
+          
+          - Register an OAuth consumer at [Special:OAuthConsumerRegistration](https://www.wikidata.org/wiki/Special:OAuthConsumerRegistration).
+          - Choose "This consumer is for use only by myself" unless you are building a multi-user tool.
+          - After registration, you will receive four values: **Consumer key**, **Consumer secret**, **Access token**, and **Access secret**.
+          - In the login dialog, check **Use OAuth 1.0a** and enter those four values.
+          
+          Credentials are entered only when you initiate an upload. They are stored securely using the operating system's native keyring service — Windows Credential Locker, macOS Keychain, or Linux Secret Service. They are not stored in plaintext.
+          
+          > **Note for upgrading from a previous Windows build:** Earlier versions stored credentials using Windows DPAPI. After upgrading to this cross-platform version, you will need to re-enter your credentials once. The old credentials cannot be automatically migrated.
+          
+          ## Validation & Rate Limiting
+          
+          Before any live upload, the app validates:
+          
+          - All mapped property IDs exist in the local property reference table.
+          - Project constant values are valid QIDs (e.g., `Q532`).
+          - No mapped column contains empty cells in any row.
+          
+          Warnings and errors are shown during dry-run. Fix any missing values or invalid constants before uploading.
+          
+          To avoid overloading Wikidata, you can set a delay between row uploads (Settings menu). A delay of 1–5 seconds is recommended for large batches.
+          
+          The app also respects Wikidata's maxlag parameter. You can set the maximum number of seconds of lag you are willing to accept in the Settings menu (default: 5 seconds). If the server reports a higher lag, the app will automatically retry up to 3 times, waiting 10 seconds between attempts, before reporting an error. The maxlag value is now correctly passed to the Wikidata API via the library's configuration, ensuring the setting takes effect. This helps avoid overwhelming the Wikidata servers during periods of high load.
+          
+          ## Diagnostic Mode
+          
+          You can generate a detailed diagnostic report to help troubleshoot startup or import issues without launching the full GUI.
+          
+          1. Open a terminal (Windows Command Prompt, Terminal on macOS/Linux) in the directory containing the application.
+          2. Run:
+          
+             ```
+             WikiDataBatchUploader --diagnose
+             ```
+          
+             (On Windows, use `WikiDataBatchUploader.exe --diagnose`.)
+          
+          3. The app will not open the main window. Instead, it will inspect the Python environment, list installed package versions, attempt to import every core and UI module, and record any failures with full tracebacks.
+          4. The report is saved to the platform-specific data directory: Windows `%APPDATA%\WikidataBatchUploader\diagnostic_report.txt`, macOS `~/Library/Application Support/WikidataBatchUploader/diagnostic_report.txt`, Linux `$XDG_DATA_HOME/WikidataBatchUploader/diagnostic_report.txt` (or `~/.local/share/WikidataBatchUploader/diagnostic_report.txt`). A timestamp is included in the file contents; repeated runs overwrite the file.
+          
+          If the main application crashes on startup, a `crash_log.txt` is also written to that same folder, containing the uncaught exception traceback. Include these files when seeking support.
+          
+          ## Troubleshooting
+          
+          **The packaged app doesn't start or crashes instantly**
+          - On Windows, ensure your system has the latest Visual C++ Redistributable (if unsure, install it). On macOS/Linux no extra runtime is typically needed.
+          - Check that your data files are not corrupted.
+          - Run the development version (`python main.py`) to see error output.
+          - If the crash persists, build the debug console version (`python build.py --console`) and run the resulting debug executable from a terminal to view error messages.
+          
+          **Login fails**
+          - Verify you are using the bot username and bot password, not your regular credentials.
+          - Ensure your bot has the necessary rights (edit existing pages, create/edit/move pages).
+          - Check that your system clock is correct (OAuth token validation depends on time).
+          
+          **Upload errors**
+          - Make sure all mapped columns have no empty values.
+          - Increase the upload delay in Settings.
+          - Check that the property IDs and QIDs exist on Wikidata.
+          
+          **Reference tables are not found / not editable**
+          - In the packaged app, the tables are under the platform-specific data directory (e.g., `%APPDATA%\WikidataBatchUploader\reference_tables` on Windows). They are created automatically on first run. If you delete them, they are recreated with defaults.
+          - You can edit them in-app via **File > Edit Reference Tables...** or by opening the Excel files directly.
+          
+          **Large datasets appear slow**
+          - The preview only shows the first 500 rows. Dry-run and upload operations load the full dataset, which may take time for very large files.
+          
+          **Existing Item Check returns no results**
+          - Ensure you have marked at least one column as a duplicate key in the mapping table.
+          - The SPARQL query may return no results if the values do not match any item's statements exactly. Try using a more distinctive combination of columns.
+          - Network issues or Wikidata SPARQL endpoint downtime can prevent the check from completing; try again later.
+          
+          ### Build-time missing module / file errors
+          
+          When building the application with PyInstaller, you may encounter one of the following errors:
+          
+          - **SystemError: `<class 'ImportError'>` returned a result with an exception set** — caused by a mismatch between `chardet` and PyInstaller. This is resolved by pinning `chardet==4.0.0` in `requirements-lock.txt`.
+          - **ModuleNotFoundError: No module named 'pkg_resources'** — `pkg_resources` is part of `setuptools`. This is resolved by pinning `setuptools` and including the `pkg_resources` and `setuptools` hidden imports in `build.py`.
+          - **FileNotFoundError: No such file or directory: '...sparqlslurper\\git_describe.txt'** — PyInstaller misses package data from transitive dependencies. This is resolved by collecting package data for `sparqlslurper` (and other dependencies) via `--collect-data`.
+          
+          The `build.py` script now includes comprehensive collection for `wikidataintegrator` and its dependencies (`pyshex`, `sparqlslurper`, `lxml`) using both `--collect-submodules` and `--collect-data`, ensuring that all transitive dependencies are bundled correctly. If you encounter a missing module/file error not listed here, please report it so the build script can be updated.
+          
+          ## License
+          
+          Your own. This is your tool. Use it responsibly.
+          
+          --------------------------------------------------------------------------
+          End of manual. The section above is README.md; the app itself is the authority on what it does.
+          
+          MORPHEUS-USER-MANUAL-END
+          test -s USER-MANUAL.txt || { echo "USER-MANUAL.txt is empty - refusing to publish a build with no manual"; exit 1; }
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
@@ -71,6 +463,7 @@ jobs:
           GATEKEEPER_README
           fi
           printf "\nThis build was compiled for: %s (%s)\n" "${{ matrix.arch }}" "$ARCHS" >> dmg_staging/README.txt
+          if [ -f USER-MANUAL.txt ]; then cp USER-MANUAL.txt dmg_staging/; fi
           if compgen -G "dmg_staging/*.app" > /dev/null; then ln -s /Applications "dmg_staging/Applications"; fi
           hdiutil create -volname "$VOLNAME" -srcfolder "dmg_staging" -ov -format UDZO app-macos-${{ matrix.arch }}.dmg
           test -f app-macos-${{ matrix.arch }}.dmg || { echo "Failed to create .dmg"; exit 1; }
@@ -81,7 +474,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ github.run_id }}
-          files: app-macos-${{ matrix.arch }}.dmg
+          files: |
+            app-macos-${{ matrix.arch }}.dmg
+            USER-MANUAL.txt
           fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
