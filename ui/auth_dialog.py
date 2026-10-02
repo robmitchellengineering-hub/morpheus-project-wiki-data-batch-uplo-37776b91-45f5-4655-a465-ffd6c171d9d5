@@ -1,6 +1,8 @@
 from PyQt6 import QtWidgets, QtCore
 from core.uploader import validate_login, validate_oauth_login
+from core import blocking_read
 from core import credential_storage
+from ui.keychain_read import KeychainRead
 
 
 class AuthDialog(QtWidgets.QDialog):
@@ -187,18 +189,35 @@ class AuthDialog(QtWidgets.QDialog):
         super().accept()
 
     def _load_stored_credentials(self):
-        """Load saved credentials and pre-fill the form."""
-        creds = credential_storage.load_credentials()
-        if not creds:
-            return
+        """Pre-fill the form from the saved login, read off the GUI thread.
 
+        The read touches the OS keychain, which can block on an authorisation prompt; this runs
+        while the dialog is being built, so on the GUI thread it froze the window (2026-10-01, the
+        same fault as Settings -- see ui/keychain_read.py).
+        """
+        self._stored_read = KeychainRead(credential_storage.load_credentials, parent=self)
+        self._stored_read.finished_read.connect(self._on_stored_credentials_read)
+
+    def _on_stored_credentials_read(self, outcome):
+        if outcome.status != blocking_read.ANSWERED or not outcome.value:
+            # Nothing saved, or the keychain did not answer: an empty form is still usable.
+            return
+        creds = outcome.value
         if creds.get('type') == 'oauth':
+            # A slow read must not overwrite something the operator has already typed.
+            if any(edit.text() for edit in (
+                self.consumer_key_edit, self.consumer_secret_edit,
+                self.access_token_edit, self.access_secret_edit,
+            )):
+                return
             self.use_oauth_checkbox.setChecked(True)
             self.consumer_key_edit.setText(creds.get('consumer_key', ''))
             self.consumer_secret_edit.setText(creds.get('consumer_secret', ''))
             self.access_token_edit.setText(creds.get('access_token', ''))
             self.access_secret_edit.setText(creds.get('access_secret', ''))
         else:
+            if self.username_edit.text() or self.password_edit.text():
+                return
             self.use_oauth_checkbox.setChecked(False)
             self.username_edit.setText(creds.get('username', ''))
             self.password_edit.setText(creds.get('password', ''))

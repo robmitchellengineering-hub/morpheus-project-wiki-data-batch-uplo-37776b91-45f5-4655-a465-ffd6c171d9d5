@@ -92,6 +92,32 @@ class DuplicateCheckExistingWorker(QThread):
             self.finished.emit(found)
 
 
+class AiMappingWorker(QThread):
+    """Run one blocking AI-mapping call off the GUI thread.
+
+    MEASURED 2026-10-01: an AI column-mapping request succeeded in 21.1 s (4,780 output tokens,
+    HTTP 200) while running on the GUI thread -- the window was unresponsive and nothing on screen
+    said work was happening, so the operator had to ask someone to check from the server side. The
+    call runs here; the panel ticks an elapsed line while it does.
+
+    `call` returns whatever the attempt produced (for Morpheus, a
+    core.morpheus_connect.MappingSuggestion). An unexpected exception is reported on `failed` so the
+    panel can log the raw text and show something plain.
+    """
+    done = pyqtSignal(object)
+    failed = pyqtSignal(str)  # exception text, for the log only
+
+    def __init__(self, call, parent=None):
+        super().__init__(parent)
+        self._call = call
+
+    def run(self):
+        try:
+            self.done.emit(self._call())
+        except Exception as e:
+            self.failed.emit(f"{type(e).__name__}: {e}")
+
+
 class CommonsUploadWorker(QThread):
     """Worker thread for uploading files to Wikimedia Commons."""
     progress = pyqtSignal(int, int, str)  # done, total, message
