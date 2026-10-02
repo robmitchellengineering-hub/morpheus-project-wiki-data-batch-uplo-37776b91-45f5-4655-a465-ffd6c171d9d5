@@ -17,6 +17,7 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - name: Write the user manual
         run: |
           cat > USER-MANUAL.txt <<'MORPHEUS-USER-MANUAL-END'
@@ -409,7 +410,6 @@ jobs:
           
           MORPHEUS-USER-MANUAL-END
           test -s USER-MANUAL.txt || { echo "USER-MANUAL.txt is empty - refusing to publish a build with no manual"; exit 1; }
-      - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
