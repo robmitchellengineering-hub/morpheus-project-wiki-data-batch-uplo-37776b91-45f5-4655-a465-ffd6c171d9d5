@@ -1,8 +1,11 @@
 from PyQt6 import QtCore, QtWidgets
+from core import blocking_read
+from core import feedback
 from core import settings as app_settings
 from core import credential_storage
 from ui.connect_dialog import ConnectDialog
 from ui.auth_dialog import AuthDialog
+from ui.keychain_read import KeychainRead
 
 
 class SettingsDialog(QtWidgets.QDialog):
@@ -128,21 +131,38 @@ class SettingsDialog(QtWidgets.QDialog):
         self._refresh_wikidata_status()
 
     def _refresh_morpheus_status(self):
-        connected = bool(credential_storage.load_morpheus_token())
-        self.morpheus_status_label.setText("Connected" if connected else "Not connected")
-        self.morpheus_connect_button.setEnabled(not connected)
-        self.morpheus_disconnect_button.setEnabled(connected)
+        """Show whether a Morpheus connection is saved.
+
+        The answer lives in the OS keychain, whose read can block on an authorisation prompt. On the
+        GUI thread that froze this dialog mid-build (2026-10-01: the window rendered half-built and
+        no Connect request was ever created), so the read runs in the background and the label says
+        it is checking until the answer arrives. A read that does not answer is reported as itself --
+        never as "Not connected", which is a different fact.
+        """
+        self.morpheus_status_label.setText(feedback.CHECKING_TEXT)
+        self.morpheus_connect_button.setEnabled(False)
+        self.morpheus_disconnect_button.setEnabled(False)
+        self._morpheus_read = KeychainRead(credential_storage.load_morpheus_token, parent=self)
+        self._morpheus_read.finished_read.connect(self._on_morpheus_read)
+
+    def _on_morpheus_read(self, outcome):
+        self.morpheus_status_label.setText(feedback.morpheus_connection_text(outcome))
+        connect_enabled, disconnect_enabled = feedback.morpheus_button_state(outcome)
+        self.morpheus_connect_button.setEnabled(connect_enabled)
+        self.morpheus_disconnect_button.setEnabled(disconnect_enabled)
 
     def _refresh_wikidata_status(self):
         """Say which account is saved, or that none is. Read from the keychain, never remembered in
-        the UI -- the same source every other part of the app reads the login from."""
-        creds = credential_storage.load_credentials() or {}
-        if creds.get('type') == 'oauth':
-            self.wikidata_status_label.setText("Saved: OAuth tokens")
-        elif creds.get('username'):
-            self.wikidata_status_label.setText(f"Saved: {creds['username']}")
-        else:
-            self.wikidata_status_label.setText("Not signed in")
+        the UI -- the same source every other part of the app reads the login from. Off the GUI
+        thread for the same reason as the Morpheus read above."""
+        self.wikidata_status_label.setText(feedback.CHECKING_TEXT)
+        self.wikidata_forget_button.setEnabled(False)
+        self._wikidata_read = KeychainRead(credential_storage.load_credentials, parent=self)
+        self._wikidata_read.finished_read.connect(self._on_wikidata_read)
+
+    def _on_wikidata_read(self, outcome):
+        self.wikidata_status_label.setText(feedback.wikidata_account_text(outcome))
+        creds = outcome.value if outcome.status == blocking_read.ANSWERED else None
         self.wikidata_forget_button.setEnabled(bool(creds))
 
     def _on_wikidata_login_clicked(self):

@@ -11,10 +11,11 @@ import os
 import sys
 import importlib
 import importlib.metadata
-import threading
 import traceback
 import datetime
 from pathlib import Path
+
+from core.blocking_read import DEFAULT_KEYCHAIN_TIMEOUT_SECONDS, read_with_timeout
 
 
 def _ensure_base_dir() -> Path:
@@ -45,37 +46,15 @@ def _get_env_snapshot() -> dict:
 
 # A KEYCHAIN READ CAN BLOCK FOREVER, AND THE SELF-TEST MUST NOT.
 #
-# MEASURED 2026-10-01 by running the app from a source checkout: `python main.py --diagnose` never finished
-# and never printed a verdict. It was not the unreachable `return` alone — the run hung earlier, inside
-# `_get_ai_config_snapshot`, on `credential_storage.load_morpheus_token()`. That reads the macOS Keychain,
-# and when the item needs authorising from a process macOS has not seen before, the read blocks on a system
-# prompt that never appears for a command-line run. The report was never written and the verdict was never
-# reached, so the failure looked like "the app did nothing".
+# MEASURED 2026-10-01 by running the app from a source checkout: `python main.py --diagnose` never
+# finished and never printed a verdict -- it blocked inside `_get_ai_config_snapshot` on a macOS
+# Keychain read, waiting on an authorisation prompt that never appears for a command-line run. A
+# diagnostic that can hang is not a diagnostic.
 #
-# A diagnostic that can hang is not a diagnostic. The read gets a deadline in a daemon thread; if the
-# keychain does not answer, the snapshot says so and the run continues. A daemon thread cannot hold the
-# process open, so a stuck read costs the timeout and nothing else.
-KEYCHAIN_TIMEOUT_SECONDS = 5
-
-
-def _read_with_timeout(read, seconds=KEYCHAIN_TIMEOUT_SECONDS):
-    """Run `read()` in a daemon thread. Returns (answered, value); never blocks longer than `seconds`."""
-    box = {}
-
-    def run():
-        try:
-            box['value'] = read()
-        except Exception as exc:  # the caller's own except turns this into a report line
-            box['error'] = exc
-
-    thread = threading.Thread(target=run, daemon=True)
-    thread.start()
-    thread.join(seconds)
-    if thread.is_alive():
-        return False, None
-    if 'error' in box:
-        raise box['error']
-    return True, box.get('value')
+# The deadline-bounded read now lives in core/blocking_read.py, shared with the GUI (which had the
+# same bug on the Qt thread -- see that module). `--diagnose` uses the same helper and the same
+# behaviour it always had: it answers, or it gives up and the snapshot says so.
+KEYCHAIN_TIMEOUT_SECONDS = DEFAULT_KEYCHAIN_TIMEOUT_SECONDS
 
 
 def _get_ai_config_snapshot() -> dict:
@@ -89,7 +68,7 @@ def _get_ai_config_snapshot() -> dict:
     try:
         from core import credential_storage
         from core import settings as app_settings
-        answered, token = _read_with_timeout(credential_storage.load_morpheus_token)
+        answered, token = read_with_timeout(credential_storage.load_morpheus_token)
         connected = bool(token) if answered else False
         snapshot = {'morpheus_connect': (
             ('connected' if connected else 'not connected') if answered
@@ -129,10 +108,12 @@ def _run_import_tests() -> dict:
     # ui.commons_upload_dialog — the two largest modules in the app — so the
     # self-test reported a clean sweep while importing neither of them.
     modules = [
+        'core.blocking_read',
         'core.commons_uploader',
         'core.credential_storage',
         'core.data_loader',
         'core.duplicate_checker',
+        'core.feedback',
         'core.morpheus_connect',
         'core.lazy_loader',
         'core.metadata_extractor',
@@ -147,6 +128,7 @@ def _run_import_tests() -> dict:
         'ui.commons_upload_dialog',
         'ui.connect_dialog',
         'ui.image_preview',
+        'ui.keychain_read',
         'ui.main_window',
         'ui.mapping_panel',
         'ui.mapping_view',
