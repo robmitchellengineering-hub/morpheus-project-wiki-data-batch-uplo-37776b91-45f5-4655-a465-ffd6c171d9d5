@@ -111,6 +111,27 @@ def load_project_constants(ref_dir):
     return df
 
 
+def verify_reference_tables(ref_dir) -> None:
+    """Fail loudly, with a precise message, if the reference tables are unusable.
+
+    Every upload depends on these two tables, so a missing, unreadable or
+    malformed table is a startup defect. It must not surface as a dead, empty
+    window (the "a window that did nothing" complaint this app started with).
+    This seeds the tables when they are absent and then loads both, raising a
+    clear error that names the directory and the underlying cause if either
+    step fails.
+    """
+    ref_dir = Path(ref_dir)
+    try:
+        ensure_sample_reference_tables(ref_dir)
+        load_wikidata_properties(ref_dir)
+        load_project_constants(ref_dir)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Reference tables are missing or unreadable in {ref_dir}: {exc}"
+        ) from exc
+
+
 def save_wikidata_properties(ref_dir, df):
     """Save the wikidata_properties DataFrame to xlsx, validating required columns."""
     required = ['property_id', 'label']

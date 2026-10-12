@@ -11,7 +11,7 @@ from ui.commons_upload_dialog import CommonsUploadDialog
 from core.data_loader import load_dataframe_preview
 from core.lazy_loader import DataLoadingWorker
 from core.workers import DryRunWorker, UploadWorker, DuplicateCheckExistingWorker, CommonsUploadWorker
-from core.reference_tables import ensure_sample_reference_tables
+from core.reference_tables import verify_reference_tables
 from core.settings import get_commons_default_category, get_commons_license_template, get_commons_edit_summary
 from config import REFERENCE_TABLES_DIR
 
@@ -23,7 +23,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.resize(1200, 800)
 
         self.setStyleSheet(GLOBAL_STYLESHEET)
-        ensure_sample_reference_tables(REFERENCE_TABLES_DIR)
+        # Fail loudly here, before any window appears, if the reference tables
+        # cannot be seeded or read — otherwise the app would open with a dead,
+        # empty mapping view and no explanation.
+        verify_reference_tables(REFERENCE_TABLES_DIR)
         
         self._create_actions()
         self._create_menu()
