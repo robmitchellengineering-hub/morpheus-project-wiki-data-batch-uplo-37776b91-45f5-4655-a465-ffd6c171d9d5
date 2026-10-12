@@ -226,6 +226,16 @@ When you run the app, it checks for these files. If they are missing, sample fil
   - Linux: `$XDG_DATA_HOME/WikidataBatchUploader/reference_tables` (or `~/.local/share/WikidataBatchUploader/reference_tables` if `$XDG_DATA_HOME` is not set)
   The base folder is created automatically. This location ensures that changes you make to the reference tables persist between runs and do not require administrator rights.
 
+> **Why not next to the executable?** The tables are seeded with defaults and then
+> edited in place (in-app or with Excel), so they must live somewhere writable. A
+> packaged app can sit somewhere read-only (e.g. `Program Files`), where edits
+> would fail or be lost on reinstall. The decision is the single source of truth in
+> `config.get_reference_tables_dir()` and is pinned by `tests/test_config_paths.py`.
+
+**If the tables cannot be created or read, the app refuses to start and says why** — it
+shows an error naming the directory, writes `crash_log.txt`, and exits non-zero rather
+than opening a window that does nothing.
+
 You can edit these files with Excel to customize property labels and project constants.
 
 **In-App Editing:**
@@ -309,6 +319,23 @@ If the main application crashes on startup, a `crash_log.txt` is also written to
 
 **Large datasets appear slow**
 - The preview only shows the first 500 rows. Dry-run and upload operations load the full dataset, which may take time for very large files.
+
+### Verifying a real Windows install
+
+CI builds macOS only, and that runner is headless — it cannot launch a windowed app, so a
+packaged install must be verified on a real Windows desktop. One step, run from a Command
+Prompt in the unzipped build folder:
+
+```
+WikiDataBatchUploader.exe --diagnose
+```
+
+Then confirm both: the report exists at `%APPDATA%\WikidataBatchUploader\diagnostic_report.txt`
+and its verdict line reads `MORPHEUS-SELFTEST: ok:`; and
+`%APPDATA%\WikidataBatchUploader\reference_tables\` contains `wikidata_properties.xlsx` and
+`project_constants.xlsx`. To verify the window itself, run `WikiDataBatchUploader.exe` with no
+arguments and confirm the main window opens — if it cannot start, it now shows an error dialog
+and writes `crash_log.txt` rather than exiting to "a window that did nothing".
 
 **Existing Item Check returns no results**
 - Ensure you have marked at least one column as a duplicate key in the mapping table.

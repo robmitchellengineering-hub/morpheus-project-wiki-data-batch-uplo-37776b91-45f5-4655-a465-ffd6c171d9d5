@@ -20,6 +20,10 @@ dist/
 # What --diagnose writes next to the source when the app is not frozen (config.get_base_dir)
 diagnostic_report.txt
 
+# Reference tables are seeded at first run and edited in place, so a checkout's copy is
+# an operator's data, not source. Never commit it (config.get_reference_tables_dir()).
+reference_tables/
+
 # The app's own scratch
 crash_log.txt
 *.log
